@@ -17,58 +17,63 @@ var SHEET_ID = "YOUR_GOOGLE_SHEET_ID_HERE";
 var SHEET_NAME = "Applications";
 var PROCESSED_LABEL = "scholarship-processed";
 
-// Column headers for the sheet (matches the application form fields)
 var HEADERS = [
   "Received At",
   "Camper Name",
   "Date of Birth",
   "Gender",
-  "Experience Level",
   "Phone",
   "Email",
-  "Parent/Guardian Name",
-  "Parent Phone",
-  "Parent Email",
   "Address",
-  "City",
-  "State",
-  "Zip",
-  "Why They Want to Attend",
-  "Additional Notes",
-  "Raw Submission Date"
+  "Skill Level",
+  "Scholarship Type",
+  "Attend Without Scholarship",
+  "TikTok",
+  "Instagram",
+  "Twitter / X",
+  "Facebook",
+  "SoundCloud"
 ];
 
-/**
- * Run this once to set up the hourly trigger.
- * After running, you can delete this function or leave it.
- */
+// Known field names per section — order matters, used as delimiters
+var CAMPER_FIELDS = [
+  "Name",
+  "Date of Birth",
+  "Gender",
+  "Phone",
+  "Email",
+  "Address",
+  "Skill Level",
+  "Scholarship Type",
+  "Attend Without Scholarship"
+];
+
+var SOCIAL_FIELDS = [
+  "TikTok",
+  "Instagram",
+  "Twitter / X",
+  "Facebook",
+  "SoundCloud"
+];
+
 function setupTrigger() {
-  // Remove any existing triggers to avoid duplicates
   ScriptApp.getProjectTriggers().forEach(function(trigger) {
     ScriptApp.deleteTrigger(trigger);
   });
 
-  // Run processApplications every hour
   ScriptApp.newTrigger("processApplications")
     .timeBased()
     .everyHours(1)
     .create();
 
   Logger.log("Trigger created. Script will run every hour.");
-
-  // Run once immediately to catch anything already in the inbox
   processApplications();
 }
 
-/**
- * Main function. Finds unprocessed scholarship application emails,
- * parses them, and writes each one to the sheet.
- */
 function processApplications() {
   var sheet = getOrCreateSheet();
   var label = getOrCreateLabel(PROCESSED_LABEL);
 
-  // Search for scholarship application emails that have not been processed yet
   var threads = GmailApp.search(
     'subject:"Scholarship Application:" -label:' + PROCESSED_LABEL
   );
@@ -93,73 +98,87 @@ function processApplications() {
         Logger.log("Error parsing message " + message.getId() + ": " + e.message);
       }
     });
-
-    // Mark thread as processed so we do not pick it up again
     thread.addLabel(label);
   });
 }
 
-/**
- * Parses an application email message into a row array.
- * Uses the plain text body which has "Field: Value" pairs.
- */
 function parseApplication(message) {
   var body = message.getPlainBody();
   var date = message.getDate();
 
   if (!body) return null;
 
-  // Pull all "Field: Value" pairs from the plain text body
-  var fields = extractFields(body);
+  // Extract each section by its ALL CAPS header
+  var camperText = extractSection(body, "CAMPER INFORMATION", "SOCIAL MEDIA");
+  var socialText = extractSection(body, "SOCIAL MEDIA", null);
+
+  var camper = parseByKnownFields(camperText, CAMPER_FIELDS);
+  var social = parseByKnownFields(socialText, SOCIAL_FIELDS);
 
   return [
     Utilities.formatDate(date, Session.getScriptTimeZone(), "MM/dd/yyyy HH:mm"),
-    fields["Name"] || "",
-    fields["DOB"] || fields["Date of Birth"] || "",
-    fields["Gender"] || "",
-    fields["Experience Level"] || fields["Experience"] || "",
-    fields["Phone"] || "",
-    fields["Email"] || "",
-    fields["Parent Name"] || fields["Parent/Guardian Name"] || fields["Guardian Name"] || "",
-    fields["Parent Phone"] || fields["Guardian Phone"] || "",
-    fields["Parent Email"] || fields["Guardian Email"] || "",
-    fields["Address"] || fields["Street"] || "",
-    fields["City"] || "",
-    fields["State"] || "",
-    fields["Zip"] || fields["Zip Code"] || fields["Postal Code"] || "",
-    fields["Why"] || fields["Why They Want to Attend"] || fields["Essay"] || fields["Statement"] || "",
-    fields["Notes"] || fields["Additional Notes"] || fields["Comments"] || "",
-    fields["Submitted"] || fields["Submitted At"] || ""
+    camper["Name"]                        || "",
+    camper["Date of Birth"]               || "",
+    camper["Gender"]                      || "",
+    camper["Phone"]                       || "",
+    camper["Email"]                       || "",
+    camper["Address"]                     || "",
+    camper["Skill Level"]                 || "",
+    camper["Scholarship Type"]            || "",
+    camper["Attend Without Scholarship"]  || "",
+    social["TikTok"]                      || "",
+    social["Instagram"]                   || "",
+    social["Twitter / X"]                 || "",
+    social["Facebook"]                    || "",
+    social["SoundCloud"]                  || ""
   ];
 }
 
 /**
- * Extracts all "Label: Value" pairs from the plain text body.
- * Returns a plain object with field names as keys.
+ * Pulls out the text between two section headers.
+ * If endLabel is null, reads to the end of the body.
  */
-function extractFields(body) {
-  var fields = {};
-  var lines = body.split("\n");
+function extractSection(body, startLabel, endLabel) {
+  var startIdx = body.indexOf(startLabel);
+  if (startIdx === -1) return "";
+  startIdx += startLabel.length;
 
-  lines.forEach(function(line) {
-    line = line.trim();
-    var colonIndex = line.indexOf(":");
-    if (colonIndex > 0) {
-      var key = line.substring(0, colonIndex).trim();
-      var value = line.substring(colonIndex + 1).trim();
-      // Skip lines that look like decorators or separators
-      if (key && value && !key.match(/^[-=]+$/) && key.length < 60) {
-        fields[key] = value;
-      }
-    }
-  });
+  var endIdx = endLabel ? body.indexOf(endLabel, startIdx) : body.length;
+  if (endIdx === -1) endIdx = body.length;
 
-  return fields;
+  return body.substring(startIdx, endIdx).trim();
 }
 
 /**
- * Returns the sheet, creating it with headers if it does not exist.
+ * Parses a block of text using known field names as delimiters.
+ * Each field value runs from the end of the field name up to the
+ * start of the next field name.
  */
+function parseByKnownFields(text, fieldNames) {
+  var result = {};
+  if (!text) return result;
+
+  // Find the position of each known field name in the text
+  var positions = [];
+  fieldNames.forEach(function(field) {
+    var idx = text.indexOf(field);
+    if (idx !== -1) {
+      positions.push({ name: field, idx: idx, valueStart: idx + field.length });
+    }
+  });
+
+  // Sort by position so we know where each value ends
+  positions.sort(function(a, b) { return a.idx - b.idx; });
+
+  for (var i = 0; i < positions.length; i++) {
+    var valueStart = positions[i].valueStart;
+    var valueEnd = i < positions.length - 1 ? positions[i + 1].idx : text.length;
+    result[positions[i].name] = text.substring(valueStart, valueEnd).trim();
+  }
+
+  return result;
+}
+
 function getOrCreateSheet() {
   var spreadsheet = SpreadsheetApp.openById(SHEET_ID);
   var sheet = spreadsheet.getSheetByName(SHEET_NAME);
@@ -167,19 +186,13 @@ function getOrCreateSheet() {
   if (!sheet) {
     sheet = spreadsheet.insertSheet(SHEET_NAME);
     sheet.appendRow(HEADERS);
-
-    // Bold the header row
     sheet.getRange(1, 1, 1, HEADERS.length).setFontWeight("bold");
-
     Logger.log("Created sheet: " + SHEET_NAME);
   }
 
   return sheet;
 }
 
-/**
- * Returns a Gmail label by name, creating it if it does not exist.
- */
 function getOrCreateLabel(name) {
   var label = GmailApp.getUserLabelByName(name);
   if (!label) {
