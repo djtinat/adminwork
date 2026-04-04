@@ -3,21 +3,14 @@
  *
  * Watches Gmail for "Scholarship Application: [Name]" emails,
  * parses each application, and appends a row to a Google Sheet.
- *
- * SETUP INSTRUCTIONS:
- * 1. Go to script.google.com and create a new project
- * 2. Paste this entire file into the editor
- * 3. Replace SHEET_ID below with your Google Sheet ID
- *    (the long string in the Sheet URL between /d/ and /edit)
- * 4. Click Run > setupTrigger once to authorize and activate
- * 5. Done. The script will check for new applications every hour.
  */
 
 var SHEET_ID = "YOUR_GOOGLE_SHEET_ID_HERE";
-var SHEET_NAME = "Applications";
+var SHEET_NAME = "Scholarship Applications 2026";
 var PROCESSED_LABEL = "scholarship-processed";
 
 var HEADERS = [
+  // Camper
   "Received At",
   "Camper Name",
   "Date of Birth",
@@ -28,14 +21,36 @@ var HEADERS = [
   "Skill Level",
   "Scholarship Type",
   "Attend Without Scholarship",
+  // Social Media
   "TikTok",
   "Instagram",
   "Twitter / X",
   "Facebook",
-  "SoundCloud"
+  "SoundCloud",
+  // Parent / Guardian
+  "Guardian Name",
+  "Relationship",
+  "Guardian Phone",
+  "Guardian Email",
+  "Guardian Address",
+  "Foster / Group Home",
+  "Video Diary Consent",
+  "Why This Scholarship",
+  // Music Background
+  "How They Heard",
+  "Music Titles / Roles",
+  "Instrument(s)",
+  "Music Style",
+  "Projects (Last 12 Mo)",
+  "Hobbies / Interests",
+  // Essay Responses
+  "Favorite DJ & Why",
+  "Inspiration",
+  "Overcame a Failure",
+  "Dream as a DJ / Producer",
+  "What You Will Bring to Camp"
 ];
 
-// Known field names per section — order matters, used as delimiters
 var CAMPER_FIELDS = [
   "Name",
   "Date of Birth",
@@ -54,6 +69,34 @@ var SOCIAL_FIELDS = [
   "Twitter / X",
   "Facebook",
   "SoundCloud"
+];
+
+var GUARDIAN_FIELDS = [
+  "Name",
+  "Relationship",
+  "Phone",
+  "Email",
+  "Address",
+  "Foster / Group Home",
+  "Video Diary Consent",
+  "Why This Scholarship"
+];
+
+var MUSIC_FIELDS = [
+  "How They Heard",
+  "Music Titles / Roles",
+  "Instrument(s)",
+  "Music Style",
+  "Projects (Last 12 Mo)",
+  "Hobbies / Interests"
+];
+
+var ESSAY_FIELDS = [
+  "Favorite DJ & Why",
+  "Inspiration",
+  "Overcame a Failure",
+  "Dream as a DJ / Producer",
+  "What You Will Bring to Camp"
 ];
 
 function setupTrigger() {
@@ -108,12 +151,17 @@ function parseApplication(message) {
 
   if (!body) return null;
 
-  // Extract each section by its ALL CAPS header
-  var camperText = extractSection(body, "CAMPER INFORMATION", "SOCIAL MEDIA");
-  var socialText = extractSection(body, "SOCIAL MEDIA", null);
+  var camperText   = extractSection(body, "CAMPER INFORMATION",  "SOCIAL MEDIA");
+  var socialText   = extractSection(body, "SOCIAL MEDIA",        "PARENT / GUARDIAN");
+  var guardianText = extractSection(body, "PARENT / GUARDIAN",   "MUSIC BACKGROUND");
+  var musicText    = extractSection(body, "MUSIC BACKGROUND",    "ESSAY RESPONSES");
+  var essayText    = extractSection(body, "ESSAY RESPONSES",     null);
 
-  var camper = parseByKnownFields(camperText, CAMPER_FIELDS);
-  var social = parseByKnownFields(socialText, SOCIAL_FIELDS);
+  var camper   = parseByKnownFields(camperText,   CAMPER_FIELDS);
+  var social   = parseByKnownFields(socialText,   SOCIAL_FIELDS);
+  var guardian = parseByKnownFields(guardianText, GUARDIAN_FIELDS);
+  var music    = parseByKnownFields(musicText,    MUSIC_FIELDS);
+  var essay    = parseByKnownFields(essayText,    ESSAY_FIELDS);
 
   return [
     Utilities.formatDate(date, Session.getScriptTimeZone(), "MM/dd/yyyy HH:mm"),
@@ -130,14 +178,29 @@ function parseApplication(message) {
     social["Instagram"]                   || "",
     social["Twitter / X"]                 || "",
     social["Facebook"]                    || "",
-    social["SoundCloud"]                  || ""
+    social["SoundCloud"]                  || "",
+    guardian["Name"]                      || "",
+    guardian["Relationship"]              || "",
+    guardian["Phone"]                     || "",
+    guardian["Email"]                     || "",
+    guardian["Address"]                   || "",
+    guardian["Foster / Group Home"]       || "",
+    guardian["Video Diary Consent"]       || "",
+    guardian["Why This Scholarship"]      || "",
+    music["How They Heard"]               || "",
+    music["Music Titles / Roles"]         || "",
+    music["Instrument(s)"]                || "",
+    music["Music Style"]                  || "",
+    music["Projects (Last 12 Mo)"]        || "",
+    music["Hobbies / Interests"]          || "",
+    essay["Favorite DJ & Why"]            || "",
+    essay["Inspiration"]                  || "",
+    essay["Overcame a Failure"]           || "",
+    essay["Dream as a DJ / Producer"]     || "",
+    essay["What You Will Bring to Camp"]  || ""
   ];
 }
 
-/**
- * Pulls out the text between two section headers.
- * If endLabel is null, reads to the end of the body.
- */
 function extractSection(body, startLabel, endLabel) {
   var startIdx = body.indexOf(startLabel);
   if (startIdx === -1) return "";
@@ -149,16 +212,10 @@ function extractSection(body, startLabel, endLabel) {
   return body.substring(startIdx, endIdx).trim();
 }
 
-/**
- * Parses a block of text using known field names as delimiters.
- * Each field value runs from the end of the field name up to the
- * start of the next field name.
- */
 function parseByKnownFields(text, fieldNames) {
   var result = {};
   if (!text) return result;
 
-  // Find the position of each known field name in the text
   var positions = [];
   fieldNames.forEach(function(field) {
     var idx = text.indexOf(field);
@@ -167,7 +224,6 @@ function parseByKnownFields(text, fieldNames) {
     }
   });
 
-  // Sort by position so we know where each value ends
   positions.sort(function(a, b) { return a.idx - b.idx; });
 
   for (var i = 0; i < positions.length; i++) {
@@ -177,6 +233,36 @@ function parseByKnownFields(text, fieldNames) {
   }
 
   return result;
+}
+
+function formatSheet() {
+  var spreadsheet = SpreadsheetApp.openById(SHEET_ID);
+  var sheet = spreadsheet.getSheetByName(SHEET_NAME);
+  if (!sheet) return;
+
+  sheet.getDataRange().setWrap(true).setVerticalAlignment("top");
+  sheet.setFrozenRows(1);
+
+  // Set column widths
+  var widths = [
+    160, 160, 120, 100, 130, 200, 220, 180, 150, 200,
+    130, 160, 130, 130, 200,
+    160, 140, 130, 200, 220, 150, 180, 300,
+    150, 180, 150, 200, 250, 200,
+    300, 300, 300, 300, 300
+  ];
+
+  widths.forEach(function(width, i) {
+    sheet.setColumnWidth(i + 1, width);
+  });
+
+  // Set header row background color
+  sheet.getRange(1, 1, 1, HEADERS.length)
+    .setBackground("#1a1a2e")
+    .setFontColor("#ffffff")
+    .setFontWeight("bold");
+
+  Logger.log("Sheet formatted.");
 }
 
 function getOrCreateSheet() {
