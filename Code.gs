@@ -8,17 +8,17 @@ var HEADERS = [
   'Camper First Name',
   'Camper Last Name',
   'Camper Gender',
+  'Cabin Mate Request',
+  'Shuttle Reservations',
   'Camper Phone Number',
   'Camper Email',
   'Camper Date of Birth',
   'How old is the Camper?',
   'School Grade',
-  'What is the name of the middle or high school the camper attends?',
   'Cohort Type',
   'Camper T-Shirt Size',
   'Camper Food Allergies',
   'Social Media',
-  'Parent or Guardian Email for Social Media',
   'How did you hear about Camp Spin Off?',
   'Parent First Name',
   'Parent Last Name',
@@ -32,9 +32,6 @@ var HEADERS = [
   'First Name of Family Physician',
   'Last Name of Family Physician',
   'Family Physician Phone Number',
-  'First Name of Family Dentist',
-  'Last Name of Family Dentist',
-  'Family Dentist Information',
   'Camper Special Dietary Needs',
   'Medical Conditions',
   'Allergies',
@@ -66,7 +63,6 @@ var HEADERS = [
   'Medical Consent Authorization',
   'Parent or Guardian Digital Signature for Medical',
   'Parent or Guardian Confirmation for Medical',
-  'Media Consent',
   'Parent or Guardian Digital Signature for Media',
   'Parent or Guardian Confirmation for Media Release',
   'Zero Tolerance Policy Acknowledgment',
@@ -82,115 +78,145 @@ var HEADERS = [
   'Parent or Guardian Confirmation for Release'
 ];
 
+var FIELD_MAP = {
+  'Cohort Type': 'Camper Type',
+  'Emergency Contact Cell Phone': 'Emergency Contact Cell Phone Number',
+  'Pickup Authorization Name': 'Pickup Authorization Names',
+  'Chronic Conditions': 'Recurrent/Chronic Illness?',
+  'Has been hospitalized?': 'Ever been hospitalized?',
+  'Has had surgery?': 'Ever had surgery?',
+  'Has had Chronic Illness?': 'Recurrent/Chronic Illness?',
+  'Has diabetes?': 'Have diabetes?',
+  'Had glasses, contacts, or hearing aids?': 'Wear glasses, contacts, or protective eye wear?',
+  'Recent bad back pain during activity?': 'Ever had back/joint problems?',
+  'Had menstrual/genital issues?': 'If female, have problems with periods/menstruation?',
+  'Had allergies, hives or eczema?': 'Have any skin problems?',
+  'Had problems with kidney or bladder?': 'Have problems with diarrhea/constipation?',
+  'Has had an accident?': 'Had a recent injury?',
+  'Had frequent headaches?': 'Had mononucleosis ("mono") during the past 12 months?',
+  'Had problems with heart?': 'Passed out/had chest pain during exercise?',
+  'Wears any dental appliances?': 'Had a recent infectious disease?',
+  'Traveled outside the country?': 'Traveled outside the country in the past 9 months?',
+  'If yes to any, please explain': 'If you answered "Yes" to any of the above...',
+  'Polio DPT or DPTa Date': 'Polio (OPV or IPV) Date',
+  'DPT/DPTa/DT/Td Date': 'DTP/DTap/DT/TD Date:',
+  'MMR Date': 'MMR Date:',
+  'Hepatitis B Date': 'Hepatitis B Date:',
+  'Varicella (Chicken Pox) Date': 'Varicella (Chicken Pox) Date:',
+  'Immunization Notes': 'Camper Vaccination History',
+  'Parent or Guardian Digital Signature for Medical': 'Parent or Guardian Digital Signature',
+  'Parent or Guardian Confirmation for Medical': 'Parent or Guardians Digital Signature Confirmation for Medical',
+  'Parent or Guardian Digital Signature for Media': 'Parent or Guardian Digital Signature for Media',
+  'Parent or Guardian Confirmation for Media Release': 'Parent or Guardians Digital Signature Confirmation for Media Release:',
+  'Zero Tolerance Policy Acknowledgment': 'Parent or Guardians Digital Signature Confirmation for Zero Tolerance Policy & Code of Conduct',
+  'Parent or Guardian Digital Signature for Zero Tolerance': 'Parent or Guardian Digital Signature for Zero Tolerance Policy & Code of Conduct',
+  'Parent or Guardian Confirmation for Zero Tolerance': 'Parent or Guardians Digital Signature Confirmation for Zero Tolerance Policy & Code of Conduct',
+  'Camper Digital Signature for Zero Tolerance': 'Camper Digital Signature for Zero Tolerance Policy & Code of Conduct',
+  'Camper Confirmation for Zero Tolerance': 'Camper Digital Signature Confirmation for Zero Tolerance Policy & Code of Conduct',
+  'Parental Registration Permissions': 'Parent or Guardian Digital Signature for Registration Permission:',
+  'Parent or Guardian Digital Signature for Registration': 'Parent or Guardian Digital Signature for Registration Permission:',
+  'Parent or Guardian Confirmation for Registration': 'Parent or Guardian Digital Signature for Registration Permission:',
+  'Release of Responsibility': 'Parent or Guardian Digital Signature for Release of Responsibility',
+  'Parent or Guardian Digital Signature for Release': 'Parent or Guardian Digital Signature for Release of Responsibility',
+  'Parent or Guardian Confirmation for Release': 'Parent or Guardian Digital Signature for Release of Responsibility'
+};
+
 function processRegistrationEmails() {
-  var sheet = getOrCreateSheet();
-  var label = getOrCreateLabel(PROCESSED_LABEL);
-  var processedIds = getProcessedMessageIds();
-  var existingCampers = getExistingCampers(sheet);
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    Logger.log('Another instance is already running. Skipping this run.');
+    return;
+  }
 
-  var query = 'subject:"' + EMAIL_SUBJECT + '" -label:' + PROCESSED_LABEL;
-  var threads = GmailApp.search(query);
-  if (threads.length === 0) return;
+  try {
+    var sheet = getOrCreateSheet();
+    var label = getOrCreateLabel(PROCESSED_LABEL);
+    var existingCampers = getExistingCampers(sheet);
+    Logger.log('Existing campers found in sheet: ' + Object.keys(existingCampers).length);
 
-  for (var t = 0; t < threads.length; t++) {
-    var messages = threads[t].getMessages();
-    for (var m = 0; m < messages.length; m++) {
-      var message = messages[m];
-      var messageId = message.getId();
-      var subject = message.getSubject();
+    var query = 'subject:"' + EMAIL_SUBJECT + '" -label:' + PROCESSED_LABEL + ' after:2026/01/01 before:2027/01/01';
+    var threads = GmailApp.search(query);
+    Logger.log('Found ' + threads.length + ' unprocessed thread(s)');
+    if (threads.length === 0) return;
 
-      if (subject.indexOf(EMAIL_SUBJECT) === -1) continue;
+    for (var t = 0; t < threads.length; t++) {
+      var messages = threads[t].getMessages();
+      for (var m = 0; m < messages.length; m++) {
+        var message = messages[m];
+        var subject = message.getSubject();
+        if (subject.indexOf(EMAIL_SUBJECT) === -1) continue;
 
-      // Skip if we already processed this exact message
-      if (processedIds[messageId]) continue;
+        try {
+          var htmlBody = message.getBody();
+          var data = parseRegistrationEmail(htmlBody);
+          data['Date Processed'] = Utilities.formatDate(message.getDate(), Session.getScriptTimeZone(), 'MM/dd/yyyy HH:mm:ss');
+          Logger.log('Parsed ' + Object.keys(data).length + ' fields from email');
 
-      try {
-        var htmlBody = message.getBody();
-        var data = parseRegistrationEmail(htmlBody);
-        data['Date Processed'] = Utilities.formatDate(message.getDate(), Session.getScriptTimeZone(), 'MM/dd/yyyy HH:mm:ss');
+          var camperKey = buildCamperKey(data);
+          Logger.log('Camper key: ' + camperKey);
 
-        // Build a unique key from camper name + email to detect duplicate submissions
-        var camperKey = buildCamperKey(data);
+          if (camperKey && existingCampers[camperKey]) {
+            Logger.log('SKIPPING duplicate camper: ' + camperKey);
+            continue;
+          }
 
-        // Skip if this camper is already in the sheet
-        if (camperKey && existingCampers[camperKey]) {
-          Logger.log('Skipping duplicate camper: ' + camperKey);
-          markMessageProcessed(messageId, processedIds);
-          continue;
+          appendRowToSheet(sheet, data);
+          Logger.log('ADDED new camper: ' + camperKey);
+
+          if (camperKey) {
+            existingCampers[camperKey] = true;
+          }
+        } catch (e) {
+          Logger.log('Error processing message: ' + e.message);
         }
-
-        appendRowToSheet(sheet, data);
-        markMessageProcessed(messageId, processedIds);
-
-        // Track so subsequent messages in this batch are also checked
-        if (camperKey) {
-          existingCampers[camperKey] = true;
-        }
-      } catch (e) {
-        Logger.log('Error processing message ' + messageId + ': ' + e.message);
       }
+      threads[t].addLabel(label);
     }
-    threads[t].addLabel(label);
+  } finally {
+    lock.releaseLock();
   }
 }
 
-/**
- * Builds a dedup key from camper first name, last name, and email.
- */
 function buildCamperKey(data) {
-  var first = (data['Camper First Name'] || '').trim().toLowerCase();
-  var last = (data['Camper Last Name'] || '').trim().toLowerCase();
-  var email = (data['Camper Email'] || '').trim().toLowerCase();
-  if (!first && !last && !email) return null;
-  return first + '|' + last + '|' + email;
+  var first = findFieldValue(data, 'Camper First Name').trim().toLowerCase();
+  var last = findFieldValue(data, 'Camper Last Name').trim().toLowerCase();
+  if (!first && !last) return null;
+  return first + '|' + last;
 }
 
-/**
- * Scans the existing sheet rows and returns a set of camper keys already present.
- */
+function findFieldValue(data, headerName) {
+  if (data[headerName] !== undefined) return data[headerName];
+  var normalizedHeader = headerName.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  for (var key in data) {
+    var normalizedKey = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    if (normalizedKey === normalizedHeader) {
+      return data[key];
+    }
+  }
+  return '';
+}
+
 function getExistingCampers(sheet) {
   var campers = {};
   var lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return campers; // only header or empty
+  if (lastRow <= 1) return campers;
 
   var headers = getSheetHeaders(sheet);
   var firstIdx = headers.indexOf('Camper First Name');
   var lastIdx = headers.indexOf('Camper Last Name');
-  var emailIdx = headers.indexOf('Camper Email');
 
-  if (firstIdx === -1 || lastIdx === -1 || emailIdx === -1) return campers;
+  if (firstIdx === -1 || lastIdx === -1) {
+    Logger.log('WARNING: Could not find dedup columns.');
+    return campers;
+  }
 
   var data = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
   for (var i = 0; i < data.length; i++) {
     var key = String(data[i][firstIdx]).trim().toLowerCase() + '|' +
-              String(data[i][lastIdx]).trim().toLowerCase() + '|' +
-              String(data[i][emailIdx]).trim().toLowerCase();
+              String(data[i][lastIdx]).trim().toLowerCase();
     campers[key] = true;
   }
   return campers;
-}
-
-/**
- * Gets the set of already-processed Gmail message IDs from PropertiesService.
- */
-function getProcessedMessageIds() {
-  var props = PropertiesService.getScriptProperties();
-  var stored = props.getProperty('processedMessageIds');
-  if (!stored) return {};
-  try {
-    return JSON.parse(stored);
-  } catch (e) {
-    return {};
-  }
-}
-
-/**
- * Records a message ID as processed in PropertiesService.
- */
-function markMessageProcessed(messageId, processedIds) {
-  processedIds[messageId] = true;
-  var props = PropertiesService.getScriptProperties();
-  props.setProperty('processedMessageIds', JSON.stringify(processedIds));
 }
 
 function parseRegistrationEmail(html) {
@@ -294,17 +320,14 @@ function isSectionHeader(name) {
     'Camper Medical Conditions',
     'Dietary Needs',
     'Camper Vaccination Records',
-    'Medical Consent Authorization',
-    'Media Consent',
     'Zero Tolerance Policy',
     'Camp Spin Off Zero Tolerance Policy & Code of Conduct',
-    'Parental Registration Permissions',
-    'Release of Responsibility',
     'General Health Reporting History',
     'Chronic Conditions',
     'Medications',
     'Registration Form',
-    'Immunization Records'
+    'Immunization Records',
+    'Registration Payment'
   ];
   for (var i = 0; i < sectionHeaders.length; i++) {
     if (name.toLowerCase() === sectionHeaders[i].toLowerCase()) return true;
@@ -339,7 +362,15 @@ function appendRowToSheet(sheet, data) {
   var headers = getSheetHeaders(sheet);
   var row = [];
   for (var i = 0; i < headers.length; i++) {
-    row.push(data[headers[i]] || '');
+    var header = headers[i];
+    var mappedField = FIELD_MAP[header];
+    if (mappedField && data[mappedField] !== undefined) {
+      row.push(data[mappedField]);
+    } else if (data[header] !== undefined) {
+      row.push(data[header]);
+    } else {
+      row.push('');
+    }
   }
   sheet.appendRow(row);
 }
@@ -357,13 +388,18 @@ function setupHeaders() {
 
 function testWithLatestEmail() {
   var threads = GmailApp.search('subject:"' + EMAIL_SUBJECT + '"', 0, 1);
-  if (threads.length === 0) return;
+  if (threads.length === 0) {
+    Logger.log('No emails found.');
+    return;
+  }
   var message = threads[0].getMessages()[0];
   var data = parseRegistrationEmail(message.getBody());
+  Logger.log('--- All parsed fields ---');
   var keys = Object.keys(data).sort();
   for (var i = 0; i < keys.length; i++) {
     Logger.log(keys[i] + ': ' + data[keys[i]]);
   }
+  Logger.log('--- Camper key would be: ' + buildCamperKey(data) + ' ---');
 }
 
 function resetProcessedEmails() {
@@ -373,8 +409,8 @@ function resetProcessedEmails() {
   for (var i = 0; i < threads.length; i++) {
     threads[i].removeLabel(label);
   }
-  // Also clear the stored message IDs
   PropertiesService.getScriptProperties().deleteProperty('processedMessageIds');
+  Logger.log('Reset complete. Removed label from ' + threads.length + ' thread(s).');
 }
 
 function addMissingHeaders() {
@@ -399,11 +435,6 @@ function addMissingHeaders() {
   newHeaderRange.setFontColor('#ffffff');
 }
 
-/**
- * One-time utility: removes duplicate rows already in the sheet.
- * Keeps the first occurrence based on Camper First Name + Last Name + Email.
- * Run this once to clean up existing duplicates.
- */
 function removeDuplicates() {
   var spreadsheet = SpreadsheetApp.openById(SHEET_ID);
   var sheet = spreadsheet.getSheetByName(SHEET_NAME);
@@ -414,13 +445,10 @@ function removeDuplicates() {
 
   var firstIdx = headers.indexOf('Camper First Name');
   var lastIdx = headers.indexOf('Camper Last Name');
-  var emailIdx = headers.indexOf('Camper Email');
 
   for (var i = 1; i < data.length; i++) {
     var key = String(data[i][firstIdx]).trim().toLowerCase() + '|' +
-              String(data[i][lastIdx]).trim().toLowerCase() + '|' +
-              String(data[i][emailIdx]).trim().toLowerCase();
-
+              String(data[i][lastIdx]).trim().toLowerCase();
     if (seen[key]) {
       rowsToDelete.push(i + 1);
     } else {
