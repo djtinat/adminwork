@@ -1,389 +1,482 @@
 /**
- * Camp Spin Off - Camper Registration Form Script
+ * Camp Spin Off – Camper Registration Form Script
  *
- * This script handles form submissions from the camper registration form
- * and appends the data to a Google Sheet, then generates a formatted
- * summary in a linked Google Doc.
+ * Handles form submissions and writes all data to a Google Sheet and
+ * a formatted Google Doc entry. Optionally sends a confirmation email
+ * to the parent/guardian.
  *
- * Setup:
- *  1. Open your Google Form → Script Editor (Extensions > Apps Script).
- *  2. Paste this file's contents.
- *  3. Set SHEET_ID to the ID of your destination Google Sheet.
- *  4. Set DOC_ID to the ID of your destination Google Doc (optional).
- *  5. Create a trigger: onFormSubmit → "From form" → "On form submit".
+ * SETUP
+ * ─────
+ * 1. Open your Google Form → Extensions › Apps Script.
+ * 2. Replace SHEET_ID, DOC_ID, and (optionally) turn SEND_CONFIRM on.
+ * 3. Save, then add a trigger:
+ *      onFormSubmit  ›  From form  ›  On form submit
+ *
+ * IMPORTANT – FIELD ORDER / INDICES
+ * ───────────────────────────────────
+ * Google Forms returns answers in the exact order questions appear on
+ * the form. Because several questions share the same title (e.g.
+ * "Social Media", "Address", "Relationship to Camper") we key every
+ * field by its 0-based position instead of its title, so nothing ever
+ * silently overwrites a duplicate.
+ *
+ * If you add, remove, or reorder any question in the form you MUST
+ * update the matching IDX value below.
  */
 
-// ── Configuration ────────────────────────────────────────────────────────────
-var SHEET_ID = "YOUR_GOOGLE_SHEET_ID_HERE"; // Replace with your Sheet ID
-var DOC_ID   = "YOUR_GOOGLE_DOC_ID_HERE";   // Replace with your Doc ID (optional)
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Configuration ─────────────────────────────────────────────────────────────
+var SHEET_ID     = "YOUR_GOOGLE_SHEET_ID_HERE"; // Google Sheet ID
+var DOC_ID       = "YOUR_GOOGLE_DOC_ID_HERE";   // Google Doc ID (set "" to skip)
+var SEND_CONFIRM = false;                        // Set true to email parent on submit
+// ──────────────────────────────────────────────────────────────────────────────
+
+
+// ── Field index map (0-based, matches form question order) ────────────────────
+var IDX = {
+
+  // ── CAMPER INFORMATION ──────────────────────────────────────────────── 0-12
+  CAMPER_FIRST_NAME        :  0,
+  CAMPER_LAST_NAME         :  1,
+  CAMPER_GENDER            :  2,
+  CAMPER_PHONE             :  3,
+  CAMPER_EMAIL             :  4,
+  CAMPER_DOB               :  5,
+  CAMPER_AGE               :  6,
+  SCHOOL_GRADE             :  7,
+  SCHOOL_NAME              :  8,   // "What is the name of the middle or high school..."
+  CAMPER_TYPE              :  9,
+  CAMPER_SHIRT_SIZE        : 10,
+  CAMPER_SOCIAL_MEDIA      : 11,
+  HEARD_ABOUT              : 12,   // "How did you hear about Camp Spin Off?"
+
+  // ── PARENT / GUARDIAN ─────────────────────────────────────────────── 13-19
+  PARENT_FIRST_NAME        : 13,
+  PARENT_LAST_NAME         : 14,
+  PARENT_CELL              : 15,
+  PARENT_WORK_PHONE        : 16,
+  PARENT_EMAIL             : 17,
+  PARENT_SOCIAL_MEDIA      : 18,
+  PARENT_ADDRESS           : 19,   // Full address (street, city, state, zip, country)
+
+  // ── EMERGENCY CONTACT ─────────────────────────────────────────────── 20-22
+  EMERG_NAME               : 20,
+  EMERG_PHONE              : 21,
+  EMERG_RELATIONSHIP       : 22,
+
+  // ── PICKUP AUTHORIZATION ──────────────────────────────────────────────── 23
+  PICKUP_NAMES             : 23,
+
+  // ── INSURANCE INFORMATION ─────────────────────────────────────────── 24-29
+  INS_CARRIER              : 24,
+  INS_POLICY_NUM           : 25,
+  RESP_FIRST_NAME          : 26,
+  RESP_LAST_NAME           : 27,
+  RESP_RELATIONSHIP        : 28,
+  RESP_ADDRESS             : 29,   // Responsible party full address
+
+  // ── MEDICAL PROVIDERS ─────────────────────────────────────────────── 30-35
+  PHYSICIAN_FIRST          : 30,
+  PHYSICIAN_LAST           : 31,
+  PHYSICIAN_PHONE          : 32,
+  DENTIST_FIRST            : 33,
+  DENTIST_LAST             : 34,
+  DENTIST_PHONE            : 35,
+
+  // ── CAMPER MEDICAL CONDITIONS & DIETARY NEEDS ─────────────────────── 36-40
+  DIETARY_NEEDS            : 36,
+  MEDICAL_CONDITIONS       : 37,   // "List all medical conditions: physical, emotional, behavioral..."
+  ALLERGIES                : 38,   // "Please list ALL drug, food, and/or other dietary sensitivities"
+  MEDICATIONS              : 39,   // Current medications the camper takes
+  CHRONIC_CONDITIONS       : 40,   // Checkboxes: Bleeding/Clotting, Kidney, Diabetes, Emotional
+                                   //   Disorder, Autism, Nervous Disorder, Sickle Cell, Other
+
+  // ── GENERAL HEALTH HISTORY (Yes / No) ─────────────────────────────── 41-59
+  MED_HOSPITALIZED         : 41,
+  MED_SURGERY              : 42,
+  MED_CHRONIC_ILLNESS      : 43,
+  MED_INFECTIOUS           : 44,
+  MED_INJURY               : 45,
+  MED_ASTHMA               : 46,
+  MED_DIABETES             : 47,
+  MED_SEIZURES             : 48,
+  MED_EYEWEAR              : 49,
+  MED_FAINTING             : 50,
+  MED_CHEST_PAIN           : 51,
+  MED_MONO                 : 52,
+  MED_MENSTRUATION         : 53,
+  MED_SLEEP                : 54,
+  MED_BACK_JOINT           : 55,
+  MED_BEDWETTING           : 56,
+  MED_DIGESTION            : 57,
+  MED_SKIN                 : 58,
+  MED_TRAVEL               : 59,
+  MED_EXPLAIN              : 60,   // "If yes to any of the above, please explain"
+
+  // ── VACCINATION RECORDS ───────────────────────────────────────────── 61-67
+  VAX_POLIO                : 61,
+  VAX_DTP                  : 62,
+  VAX_MMR                  : 63,
+  VAX_HEP_B                : 64,
+  VAX_VARICELLA            : 65,
+  VAX_NO_VACCINATE         : 66,   // "I do not vaccinate my child for religious/personal reasons"
+  VAX_NOTES                : 67,   // Additional vaccination notes / exemption explanation
+  VAX_RECORDS_FILE         : 68,   // File upload (Drive ID)
+
+  // ── CONSENTS & SIGNATURES ─────────────────────────────────────────── 69-80
+  SIG_MEDICAL_PARENT       : 69,
+  SIG_MEDICAL_CONFIRM      : 70,
+
+  SIG_MEDIA_PARENT         : 71,
+  SIG_MEDIA_CONFIRM        : 72,
+
+  SIG_ZEROTOL_PARENT       : 73,
+  SIG_ZEROTOL_PARENT_CONF  : 74,
+  SIG_ZEROTOL_CAMPER       : 75,
+  SIG_ZEROTOL_CAMPER_CONF  : 76,
+
+  SIG_REG_PERM_PARENT      : 77,
+  SIG_REG_PERM_CONFIRM     : 78,
+
+  SIG_RELEASE_PARENT       : 79,
+  SIG_RELEASE_CONFIRM      : 80,
+
+  // ── SHUTTLE / PAYMENT ─────────────────────────────────────────────────── 81
+  SHUTTLE                  : 81
+};
+// ──────────────────────────────────────────────────────────────────────────────
 
 
 /**
- * Main trigger – fires when the form is submitted.
- * @param {GoogleAppsScript.Events.FormsOnFormSubmit} e
+ * Trigger entry point – fires on every form submission.
  */
 function onFormSubmit(e) {
-  var response = e.response;
-  var data     = parseResponse(response);
+  var vals = parseResponse(e.response);
+  var ts   = e.response.getTimestamp();
 
-  writeToSheet(data);
-  writeToDoc(data);
-}
+  writeToSheet(vals, ts);
 
-
-/**
- * Parses a FormResponse into a plain object keyed by question title.
- */
-function parseResponse(response) {
-  var data = {
-    timestamp: response.getTimestamp()
-  };
-
-  var itemResponses = response.getItemResponses();
-  for (var i = 0; i < itemResponses.length; i++) {
-    var item  = itemResponses[i];
-    var title = item.getItem().getTitle().trim();
-    var value = item.getResponse();
-
-    // File-upload questions return an array of IDs; join them.
-    if (Array.isArray(value)) {
-      value = value.join(", ");
-    }
-
-    data[title] = value || "";
+  if (DOC_ID && DOC_ID !== "YOUR_GOOGLE_DOC_ID_HERE") {
+    writeToDoc(vals, ts);
   }
 
-  return data;
+  if (SEND_CONFIRM && vals[IDX.PARENT_EMAIL]) {
+    sendConfirmation(vals, ts);
+  }
 }
 
 
 /**
- * Appends one row to the destination Google Sheet.
- * The header row is created automatically on the first submission.
+ * Returns an array of response values indexed by question position.
+ * Checkbox / multi-select questions return arrays – we join them with
+ * a comma so they store cleanly in a spreadsheet cell.
+ * File-upload questions return arrays of Drive file IDs.
  */
-function writeToSheet(data) {
-  var ss    = SpreadsheetApp.openById(SHEET_ID);
-  var sheet = ss.getSheets()[0]; // Uses the first sheet tab
+function parseResponse(response) {
+  return response.getItemResponses().map(function(ir) {
+    var v = ir.getResponse();
+    if (Array.isArray(v)) { return v.join(", "); }
+    return v != null ? String(v) : "";
+  });
+}
+
+
+/**
+ * Writes one data row to the first sheet tab.
+ * Creates a styled header row automatically on first use.
+ */
+function writeToSheet(v, ts) {
+  var sheet = SpreadsheetApp.openById(SHEET_ID).getSheets()[0];
 
   var HEADERS = [
     "Timestamp",
-    // ── Camper Information ──────────────────────────────────────────────────
-    "Camper First Name",
-    "Camper Last Name",
-    "Camper Gender",
-    "Camper Phone Number",
-    "Camper Email",
-    "Camper Date of Birth",
-    "How old is the Camper?",
-    "School Grade",
-    "What is the name of the middle or high school the camper attends?",
-    "Camper Type",
-    "Camper T-Shirt Size",
-    "Social Media",                           // Camper social media
-    "How did you hear about Camp Spin Off?",
-    // ── Parent / Guardian ───────────────────────────────────────────────────
-    "Parent First Name",
-    "Parent Last Name",
-    "Parent Cell Phone Number",
-    "Parent Work Phone Number",
-    "Parent Email",
-    "Social Media_parent",                    // Parent social media (de-duped key)
-    "Address",                                // Parent address
-    // ── Emergency Contact ───────────────────────────────────────────────────
-    "Emergency Contact Name",
-    "Emergency Contact Cell Phone Number",
-    "Relationship to Camper",                 // Emergency contact relationship
-    // ── Pickup Authorization ────────────────────────────────────────────────
+    // Camper
+    "Camper First Name", "Camper Last Name", "Camper Gender",
+    "Camper Phone Number", "Camper Email", "Camper Date of Birth",
+    "Camper Age", "School Grade", "School Name",
+    "Camper Type", "T-Shirt Size", "Camper Social Media",
+    "How Did You Hear About Us",
+    // Parent / Guardian
+    "Parent First Name", "Parent Last Name", "Parent Cell Phone",
+    "Parent Work Phone", "Parent Email", "Parent Social Media",
+    "Parent Address",
+    // Emergency Contact
+    "Emergency Contact Name", "Emergency Contact Phone",
+    "Emergency Contact Relationship",
+    // Pickup
     "Pickup Authorization Names",
-    // ── Insurance ───────────────────────────────────────────────────────────
-    "Insurance Carrier",
-    "Insurance Policy Number",
-    "First Name of Responsible Party",
-    "Last Name of Responsible Party",
-    "Relationship to Camper_insurance",       // Responsible party relationship
-    "Address_insurance",                      // Responsible party address
-    // ── Physicians ──────────────────────────────────────────────────────────
-    "First Name of Family Physician",
-    "Last Name of Family Physician",
-    "Family Physician Phone Number",
-    "First Name of Family Dentist/Orthodontist",
-    "Last Name of Family Dentist/Orthodontist",
-    "Family Dentist/Orthodontist Phone Number",
-    // ── Medical / Dietary ───────────────────────────────────────────────────
-    "Camper Special Dietary Needs",
-    "Ever been hospitalized?",
-    "Ever had surgery?",
-    "Recurrent/Chronic Illness?",
-    "Had a recent infectious disease?",
-    "Had a recent injury?",
-    "Had asthma/wheezing/shortness of breath?",
-    "Have diabetes?",
-    "Had seizures?",
-    "Wear glasses, contacts, or protective eye wear?",
-    "Had fainting or dizziness?",
-    "Passed out/had chest pain during exercise?",
-    "Had mononucleosis (\"mono\") during the past 12 months?",
-    "If female, have problems with periods/menstruation?",
-    "Have problems with falling asleep/sleepwalking?",
-    "Ever had back/joint problems?",
-    "Have a history of bedwetting?",
-    "Have problems with diarrhea/constipation?",
-    "Have any skin problems?",
-    "Traveled outside the country in the past 9 months?",
-    // ── Vaccinations ────────────────────────────────────────────────────────
-    "Polio (OPV or IPV) Date",
-    "DTP/DTap/DT/TD Date:",
-    "MMR Date:",
-    "Hepatitis B Date:",
-    "Varicella (Chicken Pox) Date:",
-    "Immunization Records",
-    // ── Signatures / Consents ───────────────────────────────────────────────
-    "Parent or Guardian Digital Signature",
-    "Parent or Guardians Digital Signature Confirmation for Medical",
-    "Parent or Guardian Digital Signature for Media",
-    "Parent or Guardians Digital Signature Confirmation for Media Release:",
-    "Parent or Guardian Digital Signature for Zero Tolerance Policy & Code of Conduct",
-    "Parent or Guardians Digital Signature Confirmation for Zero Tolerance Policy & Code of Conduct",
-    "Camper Digital Signature for Zero Tolerance Policy & Code of Conduct",
-    "Camper Digital Signature Confirmation for Zero Tolerance Policy & Code of Conduct",
-    "Parent or Guardian Digital Signature for Registration Permission:",
-    "Parent or Guardian Digital Signature for Registration Permission: (Confirmation)",
-    "Parent or Guardian Digital Signature for Release of Responsibility",
-    "Parent or Guardian Digital Signature for Release of Responsibility (Confirmation)",
-    // ── Payment / Shuttle ───────────────────────────────────────────────────
+    // Insurance
+    "Insurance Carrier", "Insurance Policy Number",
+    "Responsible Party First Name", "Responsible Party Last Name",
+    "Responsible Party Relationship", "Responsible Party Address",
+    // Medical Providers
+    "Family Physician First Name", "Family Physician Last Name",
+    "Family Physician Phone",
+    "Family Dentist/Ortho First Name", "Family Dentist/Ortho Last Name",
+    "Family Dentist/Ortho Phone",
+    // Medical Conditions & Dietary
+    "Special Dietary Needs",
+    "Medical Conditions",
+    "Allergies",
+    "Medications",
+    "Chronic Conditions",
+    // General Health History
+    "Hospitalized?", "Surgery?", "Chronic Illness?",
+    "Recent Infectious Disease?", "Recent Injury?",
+    "Asthma/Wheezing/SOB?", "Diabetes?", "Seizures?",
+    "Glasses/Contacts/Eye Wear?", "Fainting/Dizziness?",
+    "Passed Out/Chest Pain During Exercise?",
+    "Mononucleosis (Past 12 Months)?",
+    "Menstruation Problems?", "Sleep Problems/Sleepwalking?",
+    "Back/Joint Problems?", "Bedwetting?",
+    "Diarrhea/Constipation?", "Skin Problems?",
+    "Traveled Outside Country (Past 9 Months)?",
+    "Health History Explanation",
+    // Vaccinations
+    "Polio Date", "DTP/DTap/DT/TD Date", "MMR Date",
+    "Hepatitis B Date", "Varicella Date",
+    "No Vaccination Reason", "Vaccination Notes",
+    "Immunization Records (File ID)",
+    // Signatures
+    "Medical Consent – Parent Signature",
+    "Medical Consent – Confirmation",
+    "Media Consent – Parent Signature",
+    "Media Consent – Confirmation",
+    "Zero Tolerance – Parent Signature",
+    "Zero Tolerance – Parent Confirmation",
+    "Zero Tolerance – Camper Signature",
+    "Zero Tolerance – Camper Confirmation",
+    "Registration Permission – Parent Signature",
+    "Registration Permission – Confirmation",
+    "Release of Responsibility – Parent Signature",
+    "Release of Responsibility – Confirmation",
+    // Shuttle
     "Shuttle Reservations"
   ];
 
-  // Write headers if the sheet is empty
   if (sheet.getLastRow() === 0) {
     sheet.appendRow(HEADERS);
-    sheet.getRange(1, 1, 1, HEADERS.length).setFontWeight("bold");
+    sheet.getRange(1, 1, 1, HEADERS.length)
+         .setFontWeight("bold")
+         .setBackground("#4a90d9")
+         .setFontColor("#ffffff");
+    sheet.setFrozenRows(1);
   }
 
-  // Build the row in the same order as HEADERS
-  var row = [
-    data["timestamp"],
-    data["Camper First Name"],
-    data["Camper Last Name"],
-    data["Camper Gender"],
-    data["Camper Phone Number"],
-    data["Camper Email"],
-    data["Camper Date of Birth"],
-    data["How old is the Camper?"],
-    data["School Grade"],
-    data["What is the name of the middle or high school the camper attends?"],
-    data["Camper Type"],
-    data["Camper T-Shirt Size"],
-    data["Social Media"],
-    data["How did you hear about Camp Spin Off?"],
-    data["Parent First Name"],
-    data["Parent Last Name"],
-    data["Parent Cell Phone Number"],
-    data["Parent Work Phone Number"],
-    data["Parent Email"],
-    data["Social Media"],                    // same field title – second occurrence
-    data["Address"],
-    data["Emergency Contact Name"],
-    data["Emergency Contact Cell Phone Number"],
-    data["Relationship to Camper"],
-    data["Pickup Authorization Names"],
-    data["Insurance Carrier"],
-    data["Insurance Policy Number"],
-    data["First Name of Responsible Party"],
-    data["Last Name of Responsible Party"],
-    data["Relationship to Camper"],          // second occurrence
-    data["Address"],                         // second occurrence
-    data["First Name of Family Physician"],
-    data["Last Name of Family Physician"],
-    data["Family Physician Phone Number"],
-    data["First Name of Family Dentist/Orthodontist"],
-    data["Last Name of Family Dentist/Orthodontist"],
-    data["Family Dentist/Orthodontist Phone Number"],
-    data["Camper Special Dietary Needs"],
-    data["Ever been hospitalized?"],
-    data["Ever had surgery?"],
-    data["Recurrent/Chronic Illness?"],
-    data["Had a recent infectious disease?"],
-    data["Had a recent injury?"],
-    data["Had asthma/wheezing/shortness of breath?"],
-    data["Have diabetes?"],
-    data["Had seizures?"],
-    data["Wear glasses, contacts, or protective eye wear?"],
-    data["Had fainting or dizziness?"],
-    data["Passed out/had chest pain during exercise?"],
-    data["Had mononucleosis (\"mono\") during the past 12 months?"],
-    data["If female, have problems with periods/menstruation?"],
-    data["Have problems with falling asleep/sleepwalking?"],
-    data["Ever had back/joint problems?"],
-    data["Have a history of bedwetting?"],
-    data["Have problems with diarrhea/constipation?"],
-    data["Have any skin problems?"],
-    data["Traveled outside the country in the past 9 months?"],
-    data["Polio (OPV or IPV) Date"],
-    data["DTP/DTap/DT/TD Date:"],
-    data["MMR Date:"],
-    data["Hepatitis B Date:"],
-    data["Varicella (Chicken Pox) Date:"],
-    data["Immunization Records"],
-    data["Parent or Guardian Digital Signature"],
-    data["Parent or Guardians Digital Signature Confirmation for Medical"],
-    data["Parent or Guardian Digital Signature for Media"],
-    data["Parent or Guardians Digital Signature Confirmation for Media Release:"],
-    data["Parent or Guardian Digital Signature for Zero Tolerance Policy & Code of Conduct"],
-    data["Parent or Guardians Digital Signature Confirmation for Zero Tolerance Policy & Code of Conduct"],
-    data["Camper Digital Signature for Zero Tolerance Policy & Code of Conduct"],
-    data["Camper Digital Signature Confirmation for Zero Tolerance Policy & Code of Conduct"],
-    data["Parent or Guardian Digital Signature for Registration Permission:"],
-    data["Parent or Guardian Digital Signature for Registration Permission:"], // confirmation
-    data["Parent or Guardian Digital Signature for Release of Responsibility"],
-    data["Parent or Guardian Digital Signature for Release of Responsibility"], // confirmation
-    data["Shuttle Reservations"]
-  ];
-
+  // Timestamp goes first, then the 82 indexed values (IDX 0-81)
+  var row = [ts].concat(v);
   sheet.appendRow(row);
 }
 
 
 /**
- * Appends a formatted camper summary to the destination Google Doc.
+ * Appends a fully formatted camper entry to the Google Doc.
  */
-function writeToDoc(data) {
-  if (DOC_ID === "YOUR_GOOGLE_DOC_ID_HERE") return; // Skip if not configured
-
+function writeToDoc(v, ts) {
   var doc  = DocumentApp.openById(DOC_ID);
   var body = doc.getBody();
 
-  var camperName = (data["Camper First Name"] || "") + " " + (data["Camper Last Name"] || "");
-  var ts         = data["timestamp"] ? Utilities.formatDate(
-    new Date(data["timestamp"]),
-    Session.getScriptTimeZone(),
-    "MM/dd/yyyy hh:mm a"
-  ) : "";
+  var camperName  = trim_(v[IDX.CAMPER_FIRST_NAME]) + " " + trim_(v[IDX.CAMPER_LAST_NAME]);
+  var parentName  = trim_(v[IDX.PARENT_FIRST_NAME])  + " " + trim_(v[IDX.PARENT_LAST_NAME]);
+  var tsFormatted = Utilities.formatDate(ts, Session.getScriptTimeZone(), "MMMM d, yyyy 'at' h:mm a");
 
   body.appendHorizontalRule();
 
-  // Title
-  var title = body.appendParagraph("Camper Registration: " + camperName);
-  title.setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  heading1_(body, "Camp Spin Off Registration — " + camperName);
+  italic_(body, "Submitted: " + tsFormatted);
 
-  body.appendParagraph("Submitted: " + ts).setItalic(true);
+  // ── CAMPER INFORMATION ─────────────────────────────────────────────────────
+  heading2_(body, "Camper Information");
+  field_(body, "First Name",      v[IDX.CAMPER_FIRST_NAME]);
+  field_(body, "Last Name",       v[IDX.CAMPER_LAST_NAME]);
+  field_(body, "Gender",          v[IDX.CAMPER_GENDER]);
+  field_(body, "Phone Number",    v[IDX.CAMPER_PHONE]);
+  field_(body, "Email",           v[IDX.CAMPER_EMAIL]);
+  field_(body, "Date of Birth",   v[IDX.CAMPER_DOB]);
+  field_(body, "Age",             v[IDX.CAMPER_AGE]);
+  field_(body, "School Grade",    v[IDX.SCHOOL_GRADE]);
+  field_(body, "School Name",     v[IDX.SCHOOL_NAME]);
+  field_(body, "Camper Type",     v[IDX.CAMPER_TYPE]);
+  field_(body, "T-Shirt Size",    v[IDX.CAMPER_SHIRT_SIZE]);
+  field_(body, "Social Media",    v[IDX.CAMPER_SOCIAL_MEDIA]);
+  field_(body, "How They Heard",  v[IDX.HEARD_ABOUT]);
 
-  // ── Helper to append a section heading ──────────────────────────────────
-  function section(label) {
-    var p = body.appendParagraph(label);
-    p.setHeading(DocumentApp.ParagraphHeading.HEADING2);
-  }
+  // ── PARENT / GUARDIAN ──────────────────────────────────────────────────────
+  heading2_(body, "Parent or Guardian Information");
+  field_(body, "First Name",      v[IDX.PARENT_FIRST_NAME]);
+  field_(body, "Last Name",       v[IDX.PARENT_LAST_NAME]);
+  field_(body, "Cell Phone",      v[IDX.PARENT_CELL]);
+  field_(body, "Work Phone",      v[IDX.PARENT_WORK_PHONE]);
+  field_(body, "Email",           v[IDX.PARENT_EMAIL]);
+  field_(body, "Social Media",    v[IDX.PARENT_SOCIAL_MEDIA]);
+  field_(body, "Address",         v[IDX.PARENT_ADDRESS]);
 
-  // ── Helper to append a labelled field ───────────────────────────────────
-  function field(label, value) {
-    if (!value) return;
-    var p    = body.appendParagraph("");
-    var bold = p.appendText(label + ": ");
-    bold.setBold(true);
-    p.appendText(value);
-  }
+  // ── EMERGENCY CONTACT ──────────────────────────────────────────────────────
+  heading2_(body, "Emergency Contact Information");
+  field_(body, "Name",            v[IDX.EMERG_NAME]);
+  field_(body, "Cell Phone",      v[IDX.EMERG_PHONE]);
+  field_(body, "Relationship",    v[IDX.EMERG_RELATIONSHIP]);
 
-  // ── Camper Information ───────────────────────────────────────────────────
-  section("Camper Information");
-  field("First Name",        data["Camper First Name"]);
-  field("Last Name",         data["Camper Last Name"]);
-  field("Gender",            data["Camper Gender"]);
-  field("Phone Number",      data["Camper Phone Number"]);
-  field("Email",             data["Camper Email"]);
-  field("Date of Birth",     data["Camper Date of Birth"]);
-  field("Age",               data["How old is the Camper?"]);
-  field("School Grade",      data["School Grade"]);
-  field("School Name",       data["What is the name of the middle or high school the camper attends?"]);
-  field("Camper Type",       data["Camper Type"]);
-  field("T-Shirt Size",      data["Camper T-Shirt Size"]);
-  field("Social Media",      data["Social Media"]);
-  field("Heard About Us",    data["How did you hear about Camp Spin Off?"]);
+  // ── PICKUP AUTHORIZATION ───────────────────────────────────────────────────
+  heading2_(body, "Pickup Authorization");
+  field_(body, "Authorized Names", v[IDX.PICKUP_NAMES]);
 
-  // ── Parent / Guardian ────────────────────────────────────────────────────
-  section("Parent or Guardian Information");
-  field("First Name",        data["Parent First Name"]);
-  field("Last Name",         data["Parent Last Name"]);
-  field("Cell Phone",        data["Parent Cell Phone Number"]);
-  field("Work Phone",        data["Parent Work Phone Number"]);
-  field("Email",             data["Parent Email"]);
-  field("Social Media",      data["Social Media"]);
-  field("Address",           data["Address"]);
+  // ── INSURANCE INFORMATION ──────────────────────────────────────────────────
+  heading2_(body, "Insurance Information");
+  field_(body, "Insurance Carrier",           v[IDX.INS_CARRIER]);
+  field_(body, "Policy Number",               v[IDX.INS_POLICY_NUM]);
+  field_(body, "Responsible Party",           trim_(v[IDX.RESP_FIRST_NAME]) + " " + trim_(v[IDX.RESP_LAST_NAME]));
+  field_(body, "Relationship to Camper",      v[IDX.RESP_RELATIONSHIP]);
+  field_(body, "Responsible Party Address",   v[IDX.RESP_ADDRESS]);
 
-  // ── Emergency Contact ────────────────────────────────────────────────────
-  section("Emergency Contact Information");
-  field("Name",              data["Emergency Contact Name"]);
-  field("Cell Phone",        data["Emergency Contact Cell Phone Number"]);
-  field("Relationship",      data["Relationship to Camper"]);
+  // ── MEDICAL PROVIDERS ──────────────────────────────────────────────────────
+  heading2_(body, "Medical Providers");
+  field_(body, "Family Physician",
+    trim_(v[IDX.PHYSICIAN_FIRST]) + " " + trim_(v[IDX.PHYSICIAN_LAST]));
+  field_(body, "Physician Phone",             v[IDX.PHYSICIAN_PHONE]);
+  field_(body, "Family Dentist / Orthodontist",
+    trim_(v[IDX.DENTIST_FIRST]) + " " + trim_(v[IDX.DENTIST_LAST]));
+  field_(body, "Dentist / Ortho Phone",       v[IDX.DENTIST_PHONE]);
 
-  // ── Pickup Authorization ─────────────────────────────────────────────────
-  section("Pickup Authorization");
-  field("Authorized Names",  data["Pickup Authorization Names"]);
+  // ── MEDICAL CONDITIONS & DIETARY NEEDS ────────────────────────────────────
+  heading2_(body, "Camper Medical Conditions & Dietary Needs");
+  field_(body, "Special Dietary Needs",       v[IDX.DIETARY_NEEDS]);
+  field_(body, "Medical Conditions",          v[IDX.MEDICAL_CONDITIONS]);
+  field_(body, "Allergies",                   v[IDX.ALLERGIES]);
+  field_(body, "Current Medications",         v[IDX.MEDICATIONS]);
+  field_(body, "Chronic Conditions",          v[IDX.CHRONIC_CONDITIONS]);
 
-  // ── Insurance ────────────────────────────────────────────────────────────
-  section("Insurance Information");
-  field("Carrier",           data["Insurance Carrier"]);
-  field("Policy Number",     data["Insurance Policy Number"]);
-  field("Responsible Party First Name", data["First Name of Responsible Party"]);
-  field("Responsible Party Last Name",  data["Last Name of Responsible Party"]);
-  field("Relationship",      data["Relationship to Camper"]);
-  field("Address",           data["Address"]);
-  field("Family Physician",  (data["First Name of Family Physician"] || "") + " " +
-                             (data["Last Name of Family Physician"] || ""));
-  field("Physician Phone",   data["Family Physician Phone Number"]);
-  field("Family Dentist/Orthodontist",
-                             (data["First Name of Family Dentist/Orthodontist"] || "") + " " +
-                             (data["Last Name of Family Dentist/Orthodontist"] || ""));
-  field("Dentist Phone",     data["Family Dentist/Orthodontist Phone Number"]);
+  // ── GENERAL HEALTH HISTORY ────────────────────────────────────────────────
+  heading2_(body, "General Health History");
+  field_(body, "Ever been hospitalized?",                    v[IDX.MED_HOSPITALIZED]);
+  field_(body, "Ever had surgery?",                          v[IDX.MED_SURGERY]);
+  field_(body, "Recurrent / chronic illness?",               v[IDX.MED_CHRONIC_ILLNESS]);
+  field_(body, "Recent infectious disease?",                 v[IDX.MED_INFECTIOUS]);
+  field_(body, "Recent injury?",                             v[IDX.MED_INJURY]);
+  field_(body, "Asthma / wheezing / shortness of breath?",   v[IDX.MED_ASTHMA]);
+  field_(body, "Diabetes?",                                  v[IDX.MED_DIABETES]);
+  field_(body, "Seizures?",                                  v[IDX.MED_SEIZURES]);
+  field_(body, "Glasses / contacts / protective eye wear?",  v[IDX.MED_EYEWEAR]);
+  field_(body, "Fainting or dizziness?",                     v[IDX.MED_FAINTING]);
+  field_(body, "Passed out / chest pain during exercise?",   v[IDX.MED_CHEST_PAIN]);
+  field_(body, "Mononucleosis in past 12 months?",           v[IDX.MED_MONO]);
+  field_(body, "Menstruation problems?",                     v[IDX.MED_MENSTRUATION]);
+  field_(body, "Sleep problems / sleepwalking?",             v[IDX.MED_SLEEP]);
+  field_(body, "Back / joint problems?",                     v[IDX.MED_BACK_JOINT]);
+  field_(body, "History of bedwetting?",                     v[IDX.MED_BEDWETTING]);
+  field_(body, "Diarrhea / constipation?",                   v[IDX.MED_DIGESTION]);
+  field_(body, "Skin problems?",                             v[IDX.MED_SKIN]);
+  field_(body, "Traveled outside country (past 9 months)?",  v[IDX.MED_TRAVEL]);
+  field_(body, "Explanation (if any answer above is Yes)",   v[IDX.MED_EXPLAIN]);
 
-  // ── Medical / Dietary ────────────────────────────────────────────────────
-  section("Camper Medical Conditions & Dietary Needs");
-  field("Special Dietary Needs",              data["Camper Special Dietary Needs"]);
-  field("Ever been hospitalized?",            data["Ever been hospitalized?"]);
-  field("Ever had surgery?",                  data["Ever had surgery?"]);
-  field("Recurrent/Chronic Illness?",         data["Recurrent/Chronic Illness?"]);
-  field("Recent infectious disease?",         data["Had a recent infectious disease?"]);
-  field("Recent injury?",                     data["Had a recent injury?"]);
-  field("Asthma/wheezing/shortness of breath?", data["Had asthma/wheezing/shortness of breath?"]);
-  field("Diabetes?",                          data["Have diabetes?"]);
-  field("Seizures?",                          data["Had seizures?"]);
-  field("Glasses/contacts/eye wear?",         data["Wear glasses, contacts, or protective eye wear?"]);
-  field("Fainting or dizziness?",             data["Had fainting or dizziness?"]);
-  field("Passed out/chest pain during exercise?", data["Passed out/had chest pain during exercise?"]);
-  field("Mononucleosis (past 12 months)?",    data["Had mononucleosis (\"mono\") during the past 12 months?"]);
-  field("Menstruation problems?",             data["If female, have problems with periods/menstruation?"]);
-  field("Sleep problems/sleepwalking?",       data["Have problems with falling asleep/sleepwalking?"]);
-  field("Back/joint problems?",               data["Ever had back/joint problems?"]);
-  field("Bedwetting?",                        data["Have a history of bedwetting?"]);
-  field("Diarrhea/constipation?",             data["Have problems with diarrhea/constipation?"]);
-  field("Skin problems?",                     data["Have any skin problems?"]);
-  field("Traveled outside country (9 months)?", data["Traveled outside the country in the past 9 months?"]);
+  // ── VACCINATION RECORDS ────────────────────────────────────────────────────
+  heading2_(body, "Camper Vaccination Records");
+  field_(body, "Polio (OPV or IPV)",           v[IDX.VAX_POLIO]);
+  field_(body, "DTP / DTap / DT / TD",         v[IDX.VAX_DTP]);
+  field_(body, "MMR",                          v[IDX.VAX_MMR]);
+  field_(body, "Hepatitis B",                  v[IDX.VAX_HEP_B]);
+  field_(body, "Varicella (Chicken Pox)",      v[IDX.VAX_VARICELLA]);
+  field_(body, "No-Vaccination Declaration",   v[IDX.VAX_NO_VACCINATE]);
+  field_(body, "Vaccination Notes",            v[IDX.VAX_NOTES]);
+  field_(body, "Immunization Records",
+    v[IDX.VAX_RECORDS_FILE]
+      ? "File uploaded (Drive ID: " + v[IDX.VAX_RECORDS_FILE] + ")"
+      : "None uploaded");
 
-  // ── Vaccinations ─────────────────────────────────────────────────────────
-  section("Camper Vaccination Records");
-  field("Polio (OPV or IPV)",       data["Polio (OPV or IPV) Date"]);
-  field("DTP/DTap/DT/TD",           data["DTP/DTap/DT/TD Date:"]);
-  field("MMR",                      data["MMR Date:"]);
-  field("Hepatitis B",              data["Hepatitis B Date:"]);
-  field("Varicella (Chicken Pox)",  data["Varicella (Chicken Pox) Date:"]);
-  field("Immunization Records",     data["Immunization Records"]);
+  // ── CONSENTS & SIGNATURES ──────────────────────────────────────────────────
+  heading2_(body, "Consents & Signatures");
 
-  // ── Consents & Signatures ─────────────────────────────────────────────────
-  section("Consents & Signatures");
-  field("Medical Consent – Parent Signature",         data["Parent or Guardian Digital Signature"]);
-  field("Medical Consent – Confirmation",             data["Parent or Guardians Digital Signature Confirmation for Medical"]);
-  field("Media Consent – Parent Signature",           data["Parent or Guardian Digital Signature for Media"]);
-  field("Media Consent – Confirmation",               data["Parent or Guardians Digital Signature Confirmation for Media Release:"]);
-  field("Zero Tolerance – Parent Signature",          data["Parent or Guardian Digital Signature for Zero Tolerance Policy & Code of Conduct"]);
-  field("Zero Tolerance – Parent Confirmation",       data["Parent or Guardians Digital Signature Confirmation for Zero Tolerance Policy & Code of Conduct"]);
-  field("Zero Tolerance – Camper Signature",          data["Camper Digital Signature for Zero Tolerance Policy & Code of Conduct"]);
-  field("Zero Tolerance – Camper Confirmation",       data["Camper Digital Signature Confirmation for Zero Tolerance Policy & Code of Conduct"]);
-  field("Registration Permission – Parent Signature", data["Parent or Guardian Digital Signature for Registration Permission:"]);
-  field("Release of Responsibility – Parent Signature", data["Parent or Guardian Digital Signature for Release of Responsibility"]);
+  heading3_(body, "Medical Consent Authorization");
+  field_(body, "Parent / Guardian Signature",  v[IDX.SIG_MEDICAL_PARENT]);
+  field_(body, "Confirmation",                 v[IDX.SIG_MEDICAL_CONFIRM]);
 
-  // ── Payment / Shuttle ─────────────────────────────────────────────────────
-  section("Registration Payment");
-  field("Shuttle Reservations", data["Shuttle Reservations"]);
+  heading3_(body, "Media Consent");
+  field_(body, "Parent / Guardian Signature",  v[IDX.SIG_MEDIA_PARENT]);
+  field_(body, "Confirmation",                 v[IDX.SIG_MEDIA_CONFIRM]);
+
+  heading3_(body, "Zero Tolerance Policy & Code of Conduct");
+  field_(body, "Parent / Guardian Signature",  v[IDX.SIG_ZEROTOL_PARENT]);
+  field_(body, "Parent Confirmation",          v[IDX.SIG_ZEROTOL_PARENT_CONF]);
+  field_(body, "Camper Signature",             v[IDX.SIG_ZEROTOL_CAMPER]);
+  field_(body, "Camper Confirmation",          v[IDX.SIG_ZEROTOL_CAMPER_CONF]);
+
+  heading3_(body, "Parental Registration Permissions");
+  field_(body, "Parent / Guardian Signature",  v[IDX.SIG_REG_PERM_PARENT]);
+  field_(body, "Confirmation",                 v[IDX.SIG_REG_PERM_CONFIRM]);
+
+  heading3_(body, "Release of Responsibility");
+  field_(body, "Parent / Guardian Signature",  v[IDX.SIG_RELEASE_PARENT]);
+  field_(body, "Confirmation",                 v[IDX.SIG_RELEASE_CONFIRM]);
+
+  // ── SHUTTLE / PAYMENT ─────────────────────────────────────────────────────
+  heading2_(body, "Registration Payment & Shuttle");
+  field_(body, "Shuttle Reservation",          v[IDX.SHUTTLE]);
 
   doc.saveAndClose();
+}
+
+
+/**
+ * Sends a brief confirmation email to the parent/guardian.
+ */
+function sendConfirmation(v, ts) {
+  var parentEmail = v[IDX.PARENT_EMAIL];
+  var camperName  = trim_(v[IDX.CAMPER_FIRST_NAME]) + " " + trim_(v[IDX.CAMPER_LAST_NAME]);
+  var parentName  = trim_(v[IDX.PARENT_FIRST_NAME]);
+
+  var subject = "Camp Spin Off – Registration Received for " + camperName;
+
+  var body = [
+    "Hi " + parentName + ",",
+    "",
+    "We've received the registration form for " + camperName + ". Thank you!",
+    "",
+    "Registration summary:",
+    "  Camper:      " + camperName,
+    "  Grade:       " + v[IDX.SCHOOL_GRADE],
+    "  School:      " + v[IDX.SCHOOL_NAME],
+    "  Camper Type: " + v[IDX.CAMPER_TYPE],
+    "  T-Shirt:     " + v[IDX.CAMPER_SHIRT_SIZE],
+    "  Shuttle:     " + v[IDX.SHUTTLE],
+    "",
+    "If you have any questions please reply to this email.",
+    "",
+    "See you at camp!",
+    "Camp Spin Off"
+  ].join("\n");
+
+  MailApp.sendEmail(parentEmail, subject, body);
+}
+
+
+// ── Private formatting helpers ────────────────────────────────────────────────
+
+function trim_(s) {
+  return s ? String(s).trim() : "";
+}
+
+function heading1_(body, text) {
+  body.appendParagraph(text).setHeading(DocumentApp.ParagraphHeading.HEADING1);
+}
+
+function heading2_(body, text) {
+  body.appendParagraph(text).setHeading(DocumentApp.ParagraphHeading.HEADING2);
+}
+
+function heading3_(body, text) {
+  body.appendParagraph(text).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+}
+
+function italic_(body, text) {
+  body.appendParagraph(text).setItalic(true);
+}
+
+/**
+ * Appends "Label: value" with the label bolded.
+ * Skips the line entirely if value is blank.
+ */
+function field_(body, label, value) {
+  if (!value || !String(value).trim()) return;
+  var p = body.appendParagraph("");
+  p.appendText(label + ": ").setBold(true);
+  p.appendText(String(value)).setBold(false);
 }
