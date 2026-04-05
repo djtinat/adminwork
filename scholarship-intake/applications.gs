@@ -81,7 +81,8 @@ function parseApplication(message) {
     music["Projects (Last 12 Mo)"], music["Hobbies / Interests"],
     essay["Favorite DJ & Why"], essay["Inspiration"], essay["Overcame a Failure"],
     essay["Expectations for Camp"], essay["Parent Support"], essay["DJ Goals"],
-    financial["Household Income"], financial["Additional Info"]
+    financial["Household Income"], financial["Additional Info"],
+    message.getAttachments().length > 0 ? "Yes" : "No"
   ];
 }
 
@@ -132,7 +133,7 @@ function getOrCreateSheet() {
       "Projects (Last 12 Mo)","Hobbies / Interests",
       "Favorite DJ & Why","Inspiration","Overcame a Failure",
       "Expectations for Camp","Parent Support","DJ Goals",
-      "Household Income","Additional Info"
+      "Household Income","Additional Info","Attachment"
     ];
     sheet.appendRow(headers);
     sheet.getRange(1,1,1,headers.length).setFontWeight("bold").setBackground("#1a1a2e").setFontColor("#ffffff");
