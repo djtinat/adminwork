@@ -31,7 +31,8 @@ var CAMPER_FIELDS   = ["Name","Date of Birth","Gender","Phone","Email","Address"
 var SOCIAL_FIELDS   = ["TikTok","Instagram","Twitter / X","Facebook","SoundCloud"];
 var GUARDIAN_FIELDS = ["Name","Relationship","Phone","Email","Address","Foster / Group Home","Video Diary Consent","Why This Scholarship"];
 var MUSIC_FIELDS    = ["How They Heard","Music Titles / Roles","Instrument(s)","Music Style","Projects (Last 12 Mo)","Hobbies / Interests"];
-var ESSAY_FIELDS    = ["Favorite DJ & Why","Inspiration","Overcame a Failure","Expectations for Camp","Parent Support","DJ Goals"];
+var ESSAY_FIELDS      = ["Favorite DJ & Why","Inspiration","Overcame a Failure","Expectations for Camp","Parent Support","DJ Goals"];
+var FINANCIAL_FIELDS  = ["Household Income","Additional Info"];
 
 function setupTrigger() {
   ScriptApp.getProjectTriggers().forEach(function(t) { ScriptApp.deleteTrigger(t); });
@@ -62,11 +63,12 @@ function parseApplication(message) {
   if (!body) return null;
   var date = message.getDate();
 
-  var camper   = parseByKnownFields(extractSection(body, "CAMPER INFORMATION",  "SOCIAL MEDIA"),          CAMPER_FIELDS);
-  var social   = parseByKnownFields(extractSection(body, "SOCIAL MEDIA",        "PARENT / GUARDIAN"),     SOCIAL_FIELDS);
-  var guardian = parseByKnownFields(extractSection(body, "PARENT / GUARDIAN",   "MUSIC BACKGROUND"),      GUARDIAN_FIELDS);
-  var music    = parseByKnownFields(extractSection(body, "MUSIC BACKGROUND",    "ESSAY RESPONSES"),       MUSIC_FIELDS);
-  var essay    = parseByKnownFields(extractSection(body, "ESSAY RESPONSES",     "FINANCIAL INFORMATION"), ESSAY_FIELDS);
+  var camper    = parseByKnownFields(extractSection(body, "CAMPER INFORMATION",  "SOCIAL MEDIA"),           CAMPER_FIELDS);
+  var social    = parseByKnownFields(extractSection(body, "SOCIAL MEDIA",        "PARENT / GUARDIAN"),      SOCIAL_FIELDS);
+  var guardian  = parseByKnownFields(extractSection(body, "PARENT / GUARDIAN",   "MUSIC BACKGROUND"),       GUARDIAN_FIELDS);
+  var music     = parseByKnownFields(extractSection(body, "MUSIC BACKGROUND",    "ESSAY RESPONSES"),        MUSIC_FIELDS);
+  var essay     = parseByKnownFields(extractSection(body, "ESSAY RESPONSES",     "FINANCIAL INFORMATION"),  ESSAY_FIELDS);
+  var financial = parseByKnownFields(extractSection(body, "FINANCIAL INFORMATION", "UPLOADED DOCUMENTS"),   FINANCIAL_FIELDS);
 
   return [
     Utilities.formatDate(date, Session.getScriptTimeZone(), "MM/dd/yyyy HH:mm"),
@@ -78,7 +80,8 @@ function parseApplication(message) {
     music["How They Heard"], music["Music Titles / Roles"], music["Instrument(s)"], music["Music Style"],
     music["Projects (Last 12 Mo)"], music["Hobbies / Interests"],
     essay["Favorite DJ & Why"], essay["Inspiration"], essay["Overcame a Failure"],
-    essay["Expectations for Camp"], essay["Parent Support"], essay["DJ Goals"]
+    essay["Expectations for Camp"], essay["Parent Support"], essay["DJ Goals"],
+    financial["Household Income"], financial["Additional Info"]
   ];
 }
 
@@ -128,7 +131,8 @@ function getOrCreateSheet() {
       "How They Heard","Music Titles / Roles","Instrument(s)","Music Style",
       "Projects (Last 12 Mo)","Hobbies / Interests",
       "Favorite DJ & Why","Inspiration","Overcame a Failure",
-      "Expectations for Camp","Parent Support","DJ Goals"
+      "Expectations for Camp","Parent Support","DJ Goals",
+      "Household Income","Additional Info"
     ];
     sheet.appendRow(headers);
     sheet.getRange(1,1,1,headers.length).setFontWeight("bold").setBackground("#1a1a2e").setFontColor("#ffffff");
