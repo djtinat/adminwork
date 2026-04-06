@@ -307,7 +307,7 @@ function processScholarshipEmails() {
     var existingApplicants = getExistingApplicants(sheet);
     Logger.log('Existing applicants found in sheet: ' + Object.keys(existingApplicants).length);
 
-    var query = 'subject:"' + EMAIL_SUBJECT + '" -label:' + PROCESSED_LABEL + ' after:2026/01/01 before:2027/01/01';
+    var query = 'subject:"' + EMAIL_SUBJECT + '" -label:' + PROCESSED_LABEL + ' after:2026/04/06 before:2027/01/01';
     var threads = GmailApp.search(query);
     Logger.log('Found ' + threads.length + ' unprocessed scholarship thread(s)');
     if (threads.length === 0) return;
