@@ -73,8 +73,8 @@ function parseScholarshipEmail(html) {
     if (sectionName.indexOf('PARENT') > -1) prefix = 'Parent ';
 
     // Extract all label/value pairs from table rows
-    // Pattern: <td style="color: #888...">Label</td> ... <td style="color: #222...">Value</td>
-    var rowRegex = /<tr[^>]*>\s*<td[^>]*color:\s*#888[^>]*>([\s\S]*?)<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<\/tr>/gi;
+    // Flexible pattern: matches two-column rows regardless of exact color codes
+    var rowRegex = /<tr[^>]*>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<\/tr>/gi;
     var match;
     while ((match = rowRegex.exec(section)) !== null) {
       var fieldName = cleanText(match[1]);
@@ -104,6 +104,16 @@ function parseScholarshipEmail(html) {
     data = parseScholarshipEmailFallback(html);
   }
 
+  // If still not enough fields, try plain text parsing (some emails arrive as plain text)
+  if (Object.keys(data).length < 5) {
+    var plainData = parseScholarshipPlainText(html);
+    for (var key in plainData) {
+      if (!data[key]) {
+        data[key] = plainData[key];
+      }
+    }
+  }
+
   return data;
 }
 
@@ -122,6 +132,165 @@ function parseScholarshipEmailFallback(html) {
     }
   }
   return data;
+}
+
+/**
+ * Plain text parser for emails that arrive without HTML formatting.
+ * Handles formats like "--- Section ---" dividers and "Label: Value" lines.
+ */
+function parseScholarshipPlainText(html) {
+  var data = {};
+  // Strip all HTML tags to get plain text
+  var text = html.replace(/<br\s*\/?>/gi, '\n');
+  text = text.replace(/<\/(?:p|div|tr|td|li)[^>]*>/gi, '\n');
+  text = text.replace(/<[^>]+>/g, '');
+  text = cleanText2(text);
+
+  var lines = text.split('\n');
+  var currentSection = '';
+
+  // Map plain text field names to our HEADERS column names
+  var plainTextMap = {
+    'name': null, // handled by section
+    'dob': 'Date of Birth',
+    'date of birth': 'Date of Birth',
+    'gender': 'Gender',
+    'phone': null, // handled by section
+    'email': null, // handled by section
+    'address': null, // handled by section
+    'skill level': 'Skill Level',
+    'experience level': 'Skill Level',
+    'scholarship type': 'Scholarship Type',
+    'attend without scholarship': 'Attend Without Scholarship',
+    'tiktok': 'TikTok',
+    'instagram': 'Instagram',
+    'twitter': 'Twitter / X',
+    'twitter / x': 'Twitter / X',
+    'facebook': 'Facebook',
+    'soundcloud': 'SoundCloud',
+    'relationship': 'Relationship',
+    'foster / group home': 'Foster / Group Home',
+    'foster care': 'Foster / Group Home',
+    'video diary consent': 'Video Diary Consent',
+    'why this scholarship': 'Why This Scholarship',
+    'why should your child participate': 'Why This Scholarship',
+    'how heard': 'How They Heard',
+    'how they heard': 'How They Heard',
+    'music titles': 'Music Titles / Roles',
+    'music titles / roles': 'Music Titles / Roles',
+    'instrument': 'Instrument(s)',
+    'instruments': 'Instrument(s)',
+    'instrument(s)': 'Instrument(s)',
+    'music style': 'Music Style',
+    'musical projects': 'Projects (Last 12 Mo)',
+    'musical projects (12 mo)': 'Projects (Last 12 Mo)',
+    'projects (last 12 mo)': 'Projects (Last 12 Mo)',
+    'hobbies': 'Hobbies / Interests',
+    'hobbies / interests': 'Hobbies / Interests',
+    'hobbies/interests': 'Hobbies / Interests',
+    'favorite dj': 'Favorite DJ & Why',
+    'favorite dj & why': 'Favorite DJ & Why',
+    'favorite dj &amp; why': 'Favorite DJ & Why',
+    'inspiration': 'Inspiration',
+    'overcome failure': 'Overcome a Failure',
+    'overcome a failure': 'Overcome a Failure',
+    'expectations': 'Expectations for Camp',
+    'expectations for camp': 'Expectations for Camp',
+    'parent support': 'Parent Support',
+    'dj goals': 'DJ Goals',
+    'household income': 'Household Income',
+    'income': 'Household Income',
+    'additional info': 'Additional Info',
+    'additional financial': 'Additional Info',
+    'uploaded documents': 'Uploaded Documents',
+    'uploaded docs': 'Uploaded Documents'
+  };
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line) continue;
+
+    // Detect section headers like "--- Camper Information ---" or "=== CAMPER ==="
+    if (line.match(/^[-=]{2,}\s*(.*?)\s*[-=]{2,}$/)) {
+      var sectionMatch = line.match(/^[-=]{2,}\s*(.*?)\s*[-=]{2,}$/);
+      currentSection = sectionMatch[1].toUpperCase();
+      continue;
+    }
+    // Also detect "SCHOLARSHIP APPLICATION" style headers
+    if (line.match(/^(CAMPER INFORMATION|SOCIAL MEDIA|PARENT|MUSIC BACKGROUND|ESSAY|FINANCIAL|UPLOADED)/i)) {
+      currentSection = line.toUpperCase();
+      continue;
+    }
+
+    // Parse "Label: Value" lines
+    var colonIdx = line.indexOf(':');
+    if (colonIdx > 0 && colonIdx < 60) {
+      var label = line.substring(0, colonIdx).trim();
+      var value = line.substring(colonIdx + 1).trim();
+      var labelLower = label.toLowerCase();
+
+      // Handle section-dependent fields (Name, Phone, Email, Address)
+      var isCamperSection = currentSection.indexOf('CAMPER') > -1 || currentSection === '';
+      var isParentSection = currentSection.indexOf('PARENT') > -1 || currentSection.indexOf('GUARDIAN') > -1;
+
+      if (labelLower === 'name') {
+        if (isParentSection) {
+          data['Parent / Guardian Name'] = value;
+        } else {
+          data['Camper Name'] = value;
+        }
+        continue;
+      }
+      if (labelLower === 'phone') {
+        if (isParentSection) {
+          data['Parent Phone'] = value;
+        } else {
+          data['Camper Phone'] = value;
+        }
+        continue;
+      }
+      if (labelLower === 'email') {
+        if (isParentSection) {
+          data['Parent Email'] = value;
+        } else {
+          data['Camper Email'] = value;
+        }
+        continue;
+      }
+      if (labelLower === 'address') {
+        if (isParentSection) {
+          data['Parent Address'] = value;
+        } else {
+          data['Camper Address'] = value;
+        }
+        continue;
+      }
+
+      // Look up mapped column name
+      var mappedName = plainTextMap[labelLower];
+      if (mappedName) {
+        data[mappedName] = value;
+      }
+    }
+  }
+
+  return data;
+}
+
+/**
+ * Decodes HTML entities and normalizes whitespace but preserves newlines.
+ */
+function cleanText2(text) {
+  if (!text) return '';
+  text = text.replace(/&amp;/g, '&');
+  text = text.replace(/&lt;/g, '<');
+  text = text.replace(/&gt;/g, '>');
+  text = text.replace(/&quot;/g, '"');
+  text = text.replace(/&#39;/g, "'");
+  text = text.replace(/&nbsp;/g, ' ');
+  text = text.replace(/&bull;/g, '');
+  text = text.replace(/&#\d+;/g, '');
+  return text;
 }
 
 function processScholarshipEmails() {
