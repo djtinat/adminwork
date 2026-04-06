@@ -1,12 +1,14 @@
 var SHEET_ID = '1dMuMGwZT9lHADxREJBXgqaZQb2cw4VRfpYnZrEBvbBs';
 var SHEET_NAME = 'Scholarship Applications';
-var EMAIL_SUBJECT = 'New Scholarship Application';
+var EMAIL_SUBJECT = 'Scholarship Application';
 var PROCESSED_LABEL = 'Scholarship-Processed';
+var CUTOFF_DATE = new Date('2026-04-06');
 
 var HEADERS = [
   'Date Processed',
   'Camper Name',
   'Date of Birth',
+  'Age',
   'Gender',
   'Camper Phone',
   'Camper Email',
@@ -45,35 +47,49 @@ var HEADERS = [
   'Has Attachment'
 ];
 
-/**
- * Parses the scholarship email by splitting it into sections first,
- * then extracting label/value pairs from each section's table rows.
- * This handles duplicate field names (Name, Phone, Email, Address)
- * that appear in both CAMPER INFORMATION and PARENT / GUARDIAN sections.
- */
+function decodeHtmlEntities(text) {
+  if (!text) return '';
+  text = text.replace(/&amp;/g, '&');
+  text = text.replace(/&lt;/g, '<');
+  text = text.replace(/&gt;/g, '>');
+  text = text.replace(/&quot;/g, '"');
+  text = text.replace(/&#39;/g, "'");
+  text = text.replace(/&nbsp;/g, ' ');
+  text = text.replace(/&bull;/g, '');
+  text = text.replace(/&#x([0-9a-fA-F]+);/g, function(match, hex) {
+    return String.fromCharCode(parseInt(hex, 16));
+  });
+  text = text.replace(/&#(\d+);/g, function(match, dec) {
+    return String.fromCharCode(parseInt(dec, 10));
+  });
+  return text;
+}
+
+function cleanText(text) {
+  if (!text) return '';
+  text = text.replace(/<[^>]+>/g, '');
+  text = decodeHtmlEntities(text);
+  text = text.replace(/\s+/g, ' ').trim();
+  return text;
+}
+
 function parseScholarshipEmail(html) {
   var data = {};
 
-  // Split by section headers (the h2 tags with gold underline)
   var sections = html.split(/<h2[^>]*>/i);
 
   for (var s = 0; s < sections.length; s++) {
     var section = sections[s];
 
-    // Determine which section we're in
     var sectionName = '';
     var sectionMatch = section.match(/^([^<]*)</);
     if (sectionMatch) {
       sectionName = cleanText(sectionMatch[1]).toUpperCase();
     }
 
-    // Determine prefix for duplicate field names
-    var prefix = '';
-    if (sectionName.indexOf('CAMPER') > -1) prefix = 'Camper ';
-    if (sectionName.indexOf('PARENT') > -1) prefix = 'Parent ';
+    var isParentSection = sectionName.indexOf('PARENT') > -1;
+    var isCamperSection = sectionName.indexOf('CAMPER') > -1;
 
-    // Extract all label/value pairs from table rows
-    // Flexible pattern: matches two-column rows regardless of exact color codes
     var rowRegex = /<tr[^>]*>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<\/tr>/gi;
     var match;
     while ((match = rowRegex.exec(section)) !== null) {
@@ -82,15 +98,37 @@ function parseScholarshipEmail(html) {
 
       if (!fieldName || fieldName.length === 0) continue;
 
-      // For fields that appear in multiple sections, add section prefix
-      if ((fieldName === 'Name' || fieldName === 'Phone' || fieldName === 'Email' || fieldName === 'Address') && prefix) {
-        data[prefix + fieldName] = fieldValue;
+      if (fieldName === 'Name') {
+        if (isParentSection) {
+          data['Parent / Guardian Name'] = fieldValue;
+        } else {
+          data['Camper Name'] = fieldValue;
+        }
+      } else if (fieldName === 'Phone') {
+        if (isParentSection) {
+          data['Parent Phone'] = fieldValue;
+        } else {
+          data['Camper Phone'] = fieldValue;
+        }
+      } else if (fieldName === 'Email') {
+        if (isParentSection) {
+          data['Parent Email'] = fieldValue;
+        } else {
+          data['Camper Email'] = fieldValue;
+        }
+      } else if (fieldName === 'Address') {
+        if (isParentSection) {
+          data['Parent Address'] = fieldValue;
+        } else {
+          data['Camper Address'] = fieldValue;
+        }
+      } else if (fieldName === 'Age' || fieldName === 'Camper Age') {
+        data['Age'] = fieldValue;
       } else {
         data[fieldName] = fieldValue;
       }
     }
 
-    // Handle the UPLOADED DOCUMENTS section (uses <p> tag, not table rows)
     if (sectionName.indexOf('UPLOADED') > -1) {
       var docMatch = section.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
       if (docMatch) {
@@ -99,12 +137,10 @@ function parseScholarshipEmail(html) {
     }
   }
 
-  // Fallback: if section-based parsing found very few fields, try generic row parsing
   if (Object.keys(data).length < 5) {
     data = parseScholarshipEmailFallback(html);
   }
 
-  // If still not enough fields, try plain text parsing (some emails arrive as plain text)
   if (Object.keys(data).length < 5) {
     var plainData = parseScholarshipPlainText(html);
     for (var key in plainData) {
@@ -117,9 +153,6 @@ function parseScholarshipEmail(html) {
   return data;
 }
 
-/**
- * Fallback parser: extracts all label/value pairs from two-column table rows.
- */
 function parseScholarshipEmailFallback(html) {
   var data = {};
   var rowRegex = /<tr[^>]*>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<\/tr>/gi;
@@ -134,30 +167,22 @@ function parseScholarshipEmailFallback(html) {
   return data;
 }
 
-/**
- * Plain text parser for emails that arrive without HTML formatting.
- * Handles formats like "--- Section ---" dividers and "Label: Value" lines.
- */
 function parseScholarshipPlainText(html) {
   var data = {};
-  // Strip all HTML tags to get plain text
   var text = html.replace(/<br\s*\/?>/gi, '\n');
   text = text.replace(/<\/(?:p|div|tr|td|li)[^>]*>/gi, '\n');
   text = text.replace(/<[^>]+>/g, '');
-  text = cleanText2(text);
+  text = decodeHtmlEntities(text);
 
   var lines = text.split('\n');
   var currentSection = '';
 
-  // Map plain text field names to our HEADERS column names
   var plainTextMap = {
-    'name': null, // handled by section
     'dob': 'Date of Birth',
     'date of birth': 'Date of Birth',
+    'age': 'Age',
+    'camper age': 'Age',
     'gender': 'Gender',
-    'phone': null, // handled by section
-    'email': null, // handled by section
-    'address': null, // handled by section
     'skill level': 'Skill Level',
     'experience level': 'Skill Level',
     'scholarship type': 'Scholarship Type',
@@ -190,7 +215,6 @@ function parseScholarshipPlainText(html) {
     'hobbies/interests': 'Hobbies / Interests',
     'favorite dj': 'Favorite DJ & Why',
     'favorite dj & why': 'Favorite DJ & Why',
-    'favorite dj &amp; why': 'Favorite DJ & Why',
     'inspiration': 'Inspiration',
     'overcome failure': 'Overcome a Failure',
     'overcome a failure': 'Overcome a Failure',
@@ -210,27 +234,22 @@ function parseScholarshipPlainText(html) {
     var line = lines[i].trim();
     if (!line) continue;
 
-    // Detect section headers like "--- Camper Information ---" or "=== CAMPER ==="
     if (line.match(/^[-=]{2,}\s*(.*?)\s*[-=]{2,}$/)) {
       var sectionMatch = line.match(/^[-=]{2,}\s*(.*?)\s*[-=]{2,}$/);
       currentSection = sectionMatch[1].toUpperCase();
       continue;
     }
-    // Also detect "SCHOLARSHIP APPLICATION" style headers
     if (line.match(/^(CAMPER INFORMATION|SOCIAL MEDIA|PARENT|MUSIC BACKGROUND|ESSAY|FINANCIAL|UPLOADED)/i)) {
       currentSection = line.toUpperCase();
       continue;
     }
 
-    // Parse "Label: Value" lines
     var colonIdx = line.indexOf(':');
     if (colonIdx > 0 && colonIdx < 60) {
       var label = line.substring(0, colonIdx).trim();
       var value = line.substring(colonIdx + 1).trim();
       var labelLower = label.toLowerCase();
 
-      // Handle section-dependent fields (Name, Phone, Email, Address)
-      var isCamperSection = currentSection.indexOf('CAMPER') > -1 || currentSection === '';
       var isParentSection = currentSection.indexOf('PARENT') > -1 || currentSection.indexOf('GUARDIAN') > -1;
 
       if (labelLower === 'name') {
@@ -266,7 +285,6 @@ function parseScholarshipPlainText(html) {
         continue;
       }
 
-      // Look up mapped column name
       var mappedName = plainTextMap[labelLower];
       if (mappedName) {
         data[mappedName] = value;
@@ -275,22 +293,6 @@ function parseScholarshipPlainText(html) {
   }
 
   return data;
-}
-
-/**
- * Decodes HTML entities and normalizes whitespace but preserves newlines.
- */
-function cleanText2(text) {
-  if (!text) return '';
-  text = text.replace(/&amp;/g, '&');
-  text = text.replace(/&lt;/g, '<');
-  text = text.replace(/&gt;/g, '>');
-  text = text.replace(/&quot;/g, '"');
-  text = text.replace(/&#39;/g, "'");
-  text = text.replace(/&nbsp;/g, ' ');
-  text = text.replace(/&bull;/g, '');
-  text = text.replace(/&#\d+;/g, '');
-  return text;
 }
 
 function processScholarshipEmails() {
@@ -319,20 +321,25 @@ function processScholarshipEmails() {
         var messageId = message.getId();
         var subject = message.getSubject();
 
+        // Skip emails older than the cutoff date
+        var messageDate = message.getDate();
+        if (messageDate < CUTOFF_DATE) {
+          Logger.log('SKIPPING old email from ' + messageDate);
+          continue;
+        }
+
         if (subject.indexOf(EMAIL_SUBJECT) === -1) continue;
         if (processedIds[messageId]) continue;
 
         try {
           var htmlBody = message.getBody();
           var data = parseScholarshipEmail(htmlBody);
-          data['Date Processed'] = Utilities.formatDate(message.getDate(), Session.getScriptTimeZone(), 'MM/dd/yyyy HH:mm:ss');
+          data['Date Processed'] = Utilities.formatDate(messageDate, Session.getScriptTimeZone(), 'MM/dd/yyyy HH:mm:ss');
           Logger.log('Parsed ' + Object.keys(data).length + ' fields from email');
 
-          // Check for attachments
           var attachments = message.getAttachments();
           data['Has Attachment'] = (attachments && attachments.length > 0) ? 'Yes' : 'No';
 
-          // Build dedup key from camper name + email
           var applicantKey = buildApplicantKey(data);
           Logger.log('Applicant key: ' + applicantKey);
 
@@ -402,21 +409,6 @@ function markScholarshipProcessed(messageId, processedIds) {
   processedIds[messageId] = true;
   var props = PropertiesService.getScriptProperties();
   props.setProperty('processedScholarshipIds', JSON.stringify(processedIds));
-}
-
-function cleanText(text) {
-  if (!text) return '';
-  text = text.replace(/<[^>]+>/g, '');
-  text = text.replace(/&amp;/g, '&');
-  text = text.replace(/&lt;/g, '<');
-  text = text.replace(/&gt;/g, '>');
-  text = text.replace(/&quot;/g, '"');
-  text = text.replace(/&#39;/g, "'");
-  text = text.replace(/&nbsp;/g, ' ');
-  text = text.replace(/&bull;/g, '');
-  text = text.replace(/&#\d+;/g, '');
-  text = text.replace(/\s+/g, ' ').trim();
-  return text;
 }
 
 function getOrCreateScholarshipSheet() {
