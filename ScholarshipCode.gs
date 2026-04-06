@@ -1,16 +1,16 @@
 var SHEET_ID = '1dMuMGwZT9lHADxREJBXgqaZQb2cw4VRfpYnZrEBvbBs';
 var SHEET_NAME = 'Scholarship Applications';
-var EMAIL_SUBJECT = 'New Camp Spin-Off Scholarship Application';
+var EMAIL_SUBJECT = 'New Scholarship Application';
 var PROCESSED_LABEL = 'Scholarship-Processed';
 
 var HEADERS = [
   'Date Processed',
-  'Name',
+  'Camper Name',
   'Date of Birth',
   'Gender',
-  'Phone',
-  'Email',
-  'Address',
+  'Camper Phone',
+  'Camper Email',
+  'Camper Address',
   'Skill Level',
   'Scholarship Type',
   'Attend Without Scholarship',
@@ -20,47 +20,114 @@ var HEADERS = [
   'Facebook',
   'SoundCloud',
   'Parent / Guardian Name',
-  'Parent / Guardian Role',
-  'Parent / Guardian Phone',
-  'Parent / Guardian Address',
-  'Parent / Guardian Consent',
-  'Why should your child participate?',
-  'Projects (Last 5)',
-  'DJ Style',
-  'Musical Influences',
-  'DJ Routine or Mix',
-  'Community Service',
+  'Relationship',
+  'Parent Phone',
+  'Parent Email',
+  'Parent Address',
+  'Foster / Group Home',
+  'Video Diary Consent',
+  'Why This Scholarship',
+  'How They Heard',
+  'Music Titles / Roles',
+  'Instrument(s)',
+  'Music Style',
+  'Projects (Last 12 Mo)',
+  'Hobbies / Interests',
+  'Favorite DJ & Why',
+  'Inspiration',
+  'Overcome a Failure',
+  'Expectations for Camp',
   'Parent Support',
   'DJ Goals',
   'Household Income',
   'Additional Info',
+  'Uploaded Documents',
   'Has Attachment'
 ];
 
-var FIELD_MAP = {
-  'Parent / Guardian Name': 'Name',
-  'Parent / Guardian Role': 'Mother/Father',
-  'Parent / Guardian Phone': 'Phone',
-  'Parent / Guardian Address': 'Address',
-  'Parent / Guardian Consent': 'I understand and my child is willing to participate',
-  'Why should your child participate?': 'Why should your child participate',
-  'DJ Routine or Mix': 'Dj Routine or Mix',
-  'Projects (Last 5)': 'Projects (Last 5)',
-  'DJ Style': 'DJ Style',
-  'Musical Influences': 'Musical Influences',
-  'Community Service': 'Community Service',
-  'Parent Support': 'Parent Support',
-  'DJ Goals': 'DJ Goals',
-  'Household Income': 'Household Income',
-  'Additional Info': 'Additional Info'
-};
+/**
+ * Parses the scholarship email by splitting it into sections first,
+ * then extracting label/value pairs from each section's table rows.
+ * This handles duplicate field names (Name, Phone, Email, Address)
+ * that appear in both CAMPER INFORMATION and PARENT / GUARDIAN sections.
+ */
+function parseScholarshipEmail(html) {
+  var data = {};
+
+  // Split by section headers (the h2 tags with gold underline)
+  var sections = html.split(/<h2[^>]*>/i);
+
+  for (var s = 0; s < sections.length; s++) {
+    var section = sections[s];
+
+    // Determine which section we're in
+    var sectionName = '';
+    var sectionMatch = section.match(/^([^<]*)</);
+    if (sectionMatch) {
+      sectionName = cleanText(sectionMatch[1]).toUpperCase();
+    }
+
+    // Determine prefix for duplicate field names
+    var prefix = '';
+    if (sectionName.indexOf('CAMPER') > -1) prefix = 'Camper ';
+    if (sectionName.indexOf('PARENT') > -1) prefix = 'Parent ';
+
+    // Extract all label/value pairs from table rows
+    // Pattern: <td style="color: #888...">Label</td> ... <td style="color: #222...">Value</td>
+    var rowRegex = /<tr[^>]*>\s*<td[^>]*color:\s*#888[^>]*>([\s\S]*?)<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<\/tr>/gi;
+    var match;
+    while ((match = rowRegex.exec(section)) !== null) {
+      var fieldName = cleanText(match[1]);
+      var fieldValue = cleanText(match[2]);
+
+      if (!fieldName || fieldName.length === 0) continue;
+
+      // For fields that appear in multiple sections, add section prefix
+      if ((fieldName === 'Name' || fieldName === 'Phone' || fieldName === 'Email' || fieldName === 'Address') && prefix) {
+        data[prefix + fieldName] = fieldValue;
+      } else {
+        data[fieldName] = fieldValue;
+      }
+    }
+
+    // Handle the UPLOADED DOCUMENTS section (uses <p> tag, not table rows)
+    if (sectionName.indexOf('UPLOADED') > -1) {
+      var docMatch = section.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+      if (docMatch) {
+        data['Uploaded Documents'] = cleanText(docMatch[1]);
+      }
+    }
+  }
+
+  // Fallback: if section-based parsing found very few fields, try generic row parsing
+  if (Object.keys(data).length < 5) {
+    data = parseScholarshipEmailFallback(html);
+  }
+
+  return data;
+}
+
+/**
+ * Fallback parser: extracts all label/value pairs from two-column table rows.
+ */
+function parseScholarshipEmailFallback(html) {
+  var data = {};
+  var rowRegex = /<tr[^>]*>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>\s*<\/tr>/gi;
+  var match;
+  while ((match = rowRegex.exec(html)) !== null) {
+    var fieldName = cleanText(match[1]);
+    var fieldValue = cleanText(match[2]);
+    if (fieldName && fieldName.length > 0 && fieldName.length < 100) {
+      data[fieldName] = fieldValue;
+    }
+  }
+  return data;
+}
 
 function processScholarshipEmails() {
   var lock = LockService.getScriptLock();
-  try {
-    lock.waitLock(30000);
-  } catch (e) {
-    Logger.log('Could not obtain lock.');
+  if (!lock.tryLock(10000)) {
+    Logger.log('Another instance is already running. Skipping this run.');
     return;
   }
 
@@ -69,6 +136,7 @@ function processScholarshipEmails() {
     var label = getOrCreateLabel(PROCESSED_LABEL);
     var processedIds = getProcessedScholarshipIds();
     var existingApplicants = getExistingApplicants(sheet);
+    Logger.log('Existing applicants found in sheet: ' + Object.keys(existingApplicants).length);
 
     var query = 'subject:"' + EMAIL_SUBJECT + '" -label:' + PROCESSED_LABEL + ' after:2026/01/01 before:2027/01/01';
     var threads = GmailApp.search(query);
@@ -89,17 +157,18 @@ function processScholarshipEmails() {
           var htmlBody = message.getBody();
           var data = parseScholarshipEmail(htmlBody);
           data['Date Processed'] = Utilities.formatDate(message.getDate(), Session.getScriptTimeZone(), 'MM/dd/yyyy HH:mm:ss');
+          Logger.log('Parsed ' + Object.keys(data).length + ' fields from email');
 
           // Check for attachments
           var attachments = message.getAttachments();
           data['Has Attachment'] = (attachments && attachments.length > 0) ? 'Yes' : 'No';
 
-          // Build dedup key from name + email
+          // Build dedup key from camper name + email
           var applicantKey = buildApplicantKey(data);
           Logger.log('Applicant key: ' + applicantKey);
 
           if (applicantKey && existingApplicants[applicantKey]) {
-            Logger.log('Skipping duplicate applicant: ' + applicantKey);
+            Logger.log('SKIPPING duplicate applicant: ' + applicantKey);
             markScholarshipProcessed(messageId, processedIds);
             continue;
           }
@@ -123,8 +192,8 @@ function processScholarshipEmails() {
 }
 
 function buildApplicantKey(data) {
-  var name = (data['Name'] || '').trim().toLowerCase();
-  var email = (data['Email'] || '').trim().toLowerCase();
+  var name = (data['Camper Name'] || data['Name'] || '').trim().toLowerCase();
+  var email = (data['Camper Email'] || data['Email'] || '').trim().toLowerCase();
   if (!name && !email) return null;
   return name + '|' + email;
 }
@@ -135,8 +204,8 @@ function getExistingApplicants(sheet) {
   if (lastRow <= 1) return applicants;
 
   var headers = getScholarshipHeaders(sheet);
-  var nameIdx = headers.indexOf('Name');
-  var emailIdx = headers.indexOf('Email');
+  var nameIdx = headers.indexOf('Camper Name');
+  var emailIdx = headers.indexOf('Camper Email');
 
   if (nameIdx === -1 || emailIdx === -1) return applicants;
 
@@ -166,83 +235,6 @@ function markScholarshipProcessed(messageId, processedIds) {
   props.setProperty('processedScholarshipIds', JSON.stringify(processedIds));
 }
 
-function parseScholarshipEmail(html) {
-  var data = {};
-  var patterns = [
-    /<td[^>]*style="[^"]*background[^"]*"[^>]*>\s*<(?:strong|b)>([^<]+)<\/(?:strong|b)>\s*<\/td>[\s\S]*?<td[^>]*>\s*([\s\S]*?)\s*<\/td>/gi,
-    /<t[hd][^>]*>\s*<(?:strong|b)>([^<]+)<\/(?:strong|b)>\s*<\/t[hd]>\s*<\/tr>\s*<tr[^>]*>\s*<td[^>]*>\s*([\s\S]*?)\s*<\/td>/gi
-  ];
-  for (var p = 0; p < patterns.length; p++) {
-    var regex = patterns[p];
-    var match;
-    while ((match = regex.exec(html)) !== null) {
-      var fieldName = cleanText(match[1]);
-      var fieldValue = cleanText(match[2]);
-      if (fieldName && fieldName.length > 0) {
-        data[fieldName] = fieldValue;
-      }
-    }
-  }
-  if (Object.keys(data).length < 5) {
-    data = parseScholarshipEmailStructural(html);
-  }
-  if (Object.keys(data).length < 5) {
-    var fallbackData = parseScholarshipEmailBoldFields(html);
-    for (var key in fallbackData) {
-      if (!data[key]) {
-        data[key] = fallbackData[key];
-      }
-    }
-  }
-  return data;
-}
-
-function parseScholarshipEmailStructural(html) {
-  var data = {};
-  var rows = html.split(/<tr[^>]*>/i);
-  for (var i = 0; i < rows.length - 1; i++) {
-    var row = rows[i];
-    var headerMatch = row.match(/<(?:strong|b)>\s*([^<]+?)\s*<\/(?:strong|b)>/i);
-    if (headerMatch) {
-      var fieldName = cleanText(headerMatch[1]);
-      if (isScholarshipSectionHeader(fieldName)) continue;
-      if (i + 1 < rows.length) {
-        var nextRow = rows[i + 1];
-        var valueText = cleanText(nextRow.replace(/<[^>]+>/g, ''));
-        if (fieldName && fieldName.length > 0) {
-          data[fieldName] = valueText;
-        }
-      }
-    }
-  }
-  return data;
-}
-
-function parseScholarshipEmailBoldFields(html) {
-  var data = {};
-  var cleaned = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
-  cleaned = cleaned.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
-  var boldRegex = /<(?:strong|b)>\s*([^<]+?)\s*<\/(?:strong|b)>/gi;
-  var match;
-  var fields = [];
-  while ((match = boldRegex.exec(cleaned)) !== null) {
-    fields.push({ name: cleanText(match[1]), index: match.index + match[0].length });
-  }
-  for (var i = 0; i < fields.length; i++) {
-    var fieldName = fields[i].name;
-    if (isScholarshipSectionHeader(fieldName)) continue;
-    var startIdx = fields[i].index;
-    var endIdx = (i + 1 < fields.length) ? fields[i + 1].index - fields[i + 1].name.length - 17 : startIdx + 500;
-    endIdx = Math.min(endIdx, cleaned.length);
-    var segment = cleaned.substring(startIdx, endIdx);
-    var value = cleanText(segment.replace(/<[^>]+>/g, ''));
-    if (fieldName && value && value.length < 2000) {
-      data[fieldName] = value;
-    }
-  }
-  return data;
-}
-
 function cleanText(text) {
   if (!text) return '';
   text = text.replace(/<[^>]+>/g, '');
@@ -252,27 +244,10 @@ function cleanText(text) {
   text = text.replace(/&quot;/g, '"');
   text = text.replace(/&#39;/g, "'");
   text = text.replace(/&nbsp;/g, ' ');
+  text = text.replace(/&bull;/g, '');
   text = text.replace(/&#\d+;/g, '');
   text = text.replace(/\s+/g, ' ').trim();
   return text;
-}
-
-function isScholarshipSectionHeader(name) {
-  var sectionHeaders = [
-    'Camper Information',
-    'Social Media',
-    'Parent / Guardian',
-    'Music Background',
-    'Essay Responses',
-    'Financial Information',
-    'Uploaded Documents',
-    'Scholarship Application',
-    'Scholarship Application Form'
-  ];
-  for (var i = 0; i < sectionHeaders.length; i++) {
-    if (name.toLowerCase() === sectionHeaders[i].toLowerCase()) return true;
-  }
-  return false;
 }
 
 function getOrCreateScholarshipSheet() {
@@ -285,8 +260,8 @@ function getOrCreateScholarshipSheet() {
     }
     var headerRange = sheet.getRange(1, 1, 1, HEADERS.length);
     headerRange.setFontWeight('bold');
-    headerRange.setBackground('#4285f4');
-    headerRange.setFontColor('#ffffff');
+    headerRange.setBackground('#1a2744');
+    headerRange.setFontColor('#d4a843');
     sheet.setFrozenRows(1);
   }
   return sheet;
@@ -303,10 +278,7 @@ function appendRowToScholarshipSheet(sheet, data) {
   var row = [];
   for (var i = 0; i < headers.length; i++) {
     var header = headers[i];
-    var mappedField = FIELD_MAP[header];
-    if (mappedField && data[mappedField] !== undefined) {
-      row.push(data[mappedField]);
-    } else if (data[header] !== undefined) {
+    if (data[header] !== undefined) {
       row.push(data[header]);
     } else {
       row.push('');
@@ -362,8 +334,8 @@ function removeScholarshipDuplicates() {
   var seen = {};
   var rowsToDelete = [];
 
-  var nameIdx = headers.indexOf('Name');
-  var emailIdx = headers.indexOf('Email');
+  var nameIdx = headers.indexOf('Camper Name');
+  var emailIdx = headers.indexOf('Camper Email');
 
   for (var i = 1; i < data.length; i++) {
     var key = String(data[i][nameIdx]).trim().toLowerCase() + '|' +
